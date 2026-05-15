@@ -12,3 +12,4 @@ crawler.log
 static/*.html
 !static/index.html
 .DS_Store
+static/avatars/
