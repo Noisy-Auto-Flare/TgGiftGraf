@@ -129,12 +129,13 @@ async def get_global_graph(limit: int = 100):
     conn = get_db_connection()
     cursor = conn.cursor()
     
-    # Получаем топ-пользователей по количеству связей
+    # Получаем топ-пользователей по количеству связей или охвату
     cursor.execute("""
         SELECT u.id, u.username, u.first_name, u.has_photo, c.cluster_id
         FROM users u
         LEFT JOIN user_clusters c ON u.id = c.user_id
         WHERE u.id IN (SELECT from_user_id FROM edges UNION SELECT to_user_id FROM edges)
+        ORDER BY (SELECT COUNT(*) FROM edges e WHERE e.from_user_id = u.id OR e.to_user_id = u.id) DESC
         LIMIT ?
     """, (limit,))
     nodes_rows = cursor.fetchall()
@@ -155,29 +156,27 @@ async def get_global_graph(limit: int = 100):
             "has_photo": bool(row['has_photo'])
         })
     
-    # Получаем рёбра между всеми пользователями, которые входят в список узлов
+    # Получаем рёбра только МЕЖДУ пользователями из нашего списка узлов
     if nodes_ids:
         placeholders = ', '.join(['?'] * len(nodes_ids))
         cursor.execute(f"""
             SELECT from_user_id, to_user_id, weight, last_gift_title
             FROM edges
-            WHERE from_user_id IN ({placeholders}) OR to_user_id IN ({placeholders})
+            WHERE from_user_id IN ({placeholders}) AND to_user_id IN ({placeholders})
         """, nodes_ids + nodes_ids)
         edges_rows = cursor.fetchall()
         
         edges = []
         for row in edges_rows:
-            # Добавляем ребро только если оба узла есть в нашем списке отображаемых узлов
-            if row['from_user_id'] in nodes_ids and row['to_user_id'] in nodes_ids:
-                length = max(50, 300 - row['weight'] * 20)
-                edges.append({
-                    "from": row['from_user_id'],
-                    "to": row['to_user_id'],
-                    "weight": row['weight'],
-                    "label": str(row['weight']), # Число подарков над стрелкой
-                    "length": length,
-                    "title": f"Подарков: {row['weight']}"
-                })
+            length = max(50, 300 - row['weight'] * 20)
+            edges.append({
+                "from": row['from_user_id'],
+                "to": row['to_user_id'],
+                "weight": row['weight'],
+                "label": str(row['weight']), # Число подарков над стрелкой
+                "length": length,
+                "title": f"Подарков: {row['weight']}"
+            })
     else:
         edges = []
 
