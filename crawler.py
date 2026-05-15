@@ -96,30 +96,47 @@ async def add_to_queue(conn, user_id, priority=0, source='unknown'):
         conn.commit()
 
 async def scan_chats(client, conn):
-    """Сканирует целевые чаты с паузами."""
+    """Сканирует целевые чаты с паузами. Если нет прав админа, собирает из последних сообщений."""
     logger.info("Запуск сканирования целевых чатов...")
     for chat_username in TARGET_CHATS:
         try:
             logger.info(f"Сбор участников из чата @{chat_username}")
             count = 0
-            async for user in client.iter_participants(chat_username, limit=500):
-                if not user.bot:
-                    cursor = conn.cursor()
-                    cursor.execute('''
-                        INSERT INTO users (id, username, first_name, discovery_source, is_bot) 
-                        VALUES (?, ?, ?, 'chat', ?)
-                        ON CONFLICT(id) DO UPDATE SET 
-                            username = COALESCE(excluded.username, users.username),
-                            first_name = COALESCE(excluded.first_name, users.first_name),
-                            is_bot = excluded.is_bot
-                    ''', (user.id, user.username, (user.first_name or "") + (" " + user.last_name if user.last_name else ""), 0))
-                    
-                    await add_to_queue(conn, user.id, priority=0, source='chat')
-                    count += 1
-                
-                # Пауза каждые 5 пользователей для имитации человеческого чтения списка
-                if count % 5 == 0:
-                    await human_delay(0.5, 1.0)
+            try:
+                # Пробуем получить полный список участников (работает в группах или если мы админ канала)
+                async for user in client.iter_participants(chat_username, limit=500):
+                    if isinstance(user, types.User) and not user.bot:
+                        cursor = conn.cursor()
+                        cursor.execute('''
+                            INSERT INTO users (id, username, first_name, discovery_source, is_bot) 
+                            VALUES (?, ?, ?, 'chat', ?)
+                            ON CONFLICT(id) DO UPDATE SET 
+                                username = COALESCE(excluded.username, users.username),
+                                first_name = COALESCE(excluded.first_name, users.first_name),
+                                is_bot = excluded.is_bot
+                        ''', (user.id, user.username, (user.first_name or "") + (" " + user.last_name if user.last_name else ""), 0))
+                        
+                        await add_to_queue(conn, user.id, priority=0, source='chat')
+                        count += 1
+                    if count % 10 == 0: await human_delay(0.5, 1.0)
+            except (errors.ChatAdminRequiredError, errors.ChannelPrivateError):
+                logger.info(f"Нет прав для получения списка участников @{chat_username}. Собираем из сообщений...")
+                # Собираем авторов последних сообщений
+                async for message in client.iter_messages(chat_username, limit=100):
+                    user = message.sender
+                    if isinstance(user, types.User) and not user.bot:
+                        cursor = conn.cursor()
+                        cursor.execute('''
+                            INSERT INTO users (id, username, first_name, discovery_source, is_bot) 
+                            VALUES (?, ?, ?, 'chat_msg', ?)
+                            ON CONFLICT(id) DO UPDATE SET 
+                                username = COALESCE(excluded.username, users.username),
+                                first_name = COALESCE(excluded.first_name, users.first_name),
+                                is_bot = excluded.is_bot
+                        ''', (user.id, user.username, (user.first_name or "") + (" " + user.last_name if user.last_name else ""), 0))
+                        await add_to_queue(conn, user.id, priority=0, source='chat')
+                        count += 1
+                    if count % 5 == 0: await human_delay(0.5, 1.0)
                     
             await human_delay(3, 7) # Пауза между чатами
         except Exception as e:
@@ -151,7 +168,18 @@ async def process_user(client, conn, target_user_id):
         # Нативный запрос подарков
         logger.info(f"Запрос подарков для {target_user_id}...")
         await human_delay(1, 2)
-        gifts_res = await client(functions.payments.GetUserGiftsRequest(
+        
+        # Динамически ищем метод, чтобы избежать ошибок при старых версиях Telethon
+        GetUserGiftsRequest = getattr(functions.payments, 'GetUserGiftsRequest', None)
+        if not GetUserGiftsRequest:
+            logger.error("Ваша версия Telethon слишком стара и не поддерживает GetUserGiftsRequest. Пожалуйста, обновите: pip install --upgrade telethon")
+            # Помечаем пользователя, чтобы не зацикливаться, но не удаляем (вдруг обновите)
+            cursor.execute("UPDATE users SET last_scanned = ? WHERE id = ?", (int(time.time()), target_user_id))
+            cursor.execute("DELETE FROM crawl_queue WHERE user_id = ?", (target_user_id,))
+            conn.commit()
+            return
+
+        gifts_res = await client(GetUserGiftsRequest(
             user_id=input_entity,
             offset='',
             limit=100
