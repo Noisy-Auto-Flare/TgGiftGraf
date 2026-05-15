@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
-    <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+    <script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/vis-network/9.1.2/standalone/umd/vis-network.min.js"></script>
     <style>
         :root {
             --bg-color: #0b0e14;
@@ -112,13 +112,33 @@
             flex: 1;
             overflow: hidden;
             position: relative;
+            min-height: 0; /* Важно для flex-контейнеров */
         }
         #graph-container {
             flex: 1;
-            background: transparent;
+            background: rgba(0,0,0,0.2);
             width: 100%;
             height: 100%;
-            min-height: 400px; /* Гарантируем минимальную высоту */
+            min-height: 400px;
+            position: relative;
+            z-index: 1;
+        }
+        #debug-console {
+            position: absolute;
+            bottom: 10px;
+            right: 400px;
+            background: rgba(0,0,0,0.8);
+            color: #0f0;
+            font-family: monospace;
+            font-size: 10px;
+            padding: 5px;
+            max-height: 100px;
+            overflow-y: auto;
+            pointer-events: none;
+            z-index: 1000;
+            width: 300px;
+            border-radius: 4px;
+            display: none; /* Скрыто по умолчанию, включим при ошибках */
         }
         #sidebar {
             width: 380px;
@@ -300,6 +320,7 @@
     </header>
     <main>
         <div id="graph-container"></div>
+        <div id="debug-console"></div>
         <div class="controls">
             <button class="btn active" id="btn-local" onclick="switchMode('local')">
                 <span>📍</span> Локальный
@@ -381,6 +402,22 @@
     </main>
 
     <script>
+        // Простая консоль для отладки на странице
+        function logDebug(msg, isError = false) {
+            const consoleEl = document.getElementById('debug-console');
+            consoleEl.style.display = 'block';
+            const entry = document.createElement('div');
+            entry.style.color = isError ? '#f00' : '#0f0';
+            entry.innerText = `> ${msg}`;
+            consoleEl.appendChild(entry);
+            consoleEl.scrollTop = consoleEl.scrollHeight;
+            console.log(msg);
+        }
+
+        window.onerror = function(msg, url, line) {
+            logDebug(`Глобальная ошибка: ${msg} (строка ${line})`, true);
+        };
+
         let network = null;
         let currentMode = 'local'; // 'local' or 'global'
         const colorPalette = ['#38bdf8', '#818cf8', '#a78bfa', '#fb7185', '#fb923c', '#facc15', '#4ade80'];
@@ -519,10 +556,16 @@
         }
 
         function renderGraph(nodesData, edgesData, isGlobal) {
-            console.log(`Rendering graph: ${nodesData.length} nodes, ${edgesData.length} edges`);
+            logDebug(`Отрисовка: ${nodesData.length} узлов, ${edgesData.length} связей`);
             
+            if (typeof vis === 'undefined') {
+                logDebug("Ошибка: библиотека vis-network не загружена!", true);
+                hideLoading();
+                return;
+            }
+
             if (nodesData.length === 0) {
-                console.warn("No nodes to render");
+                logDebug("Предупреждение: нет данных для отрисовки", true);
                 hideLoading();
                 return;
             }
@@ -534,13 +577,14 @@
                     label: node.label,
                     shape: photo ? 'circularImage' : 'dot',
                     image: photo,
+                    brokenImage: 'https://ui-avatars.com/api/?name=' + encodeURIComponent(node.label),
                     size: isGlobal ? 20 : 30,
                     color: {
                         background: colorPalette[node.cluster % colorPalette.length] || '#38bdf8',
                         border: '#ffffff',
                         highlight: { background: '#38bdf8', border: '#ffffff' }
                     },
-                    font: { color: '#f8fafc', size: 12, face: 'Inter', strokeWidth: 0 },
+                    font: { color: '#f8fafc', size: 12, face: 'Inter', strokeWidth: 4, strokeColor: '#0b0e14' },
                     borderWidth: 2
                 };
             }));
@@ -595,12 +639,17 @@
             };
 
             if (network) network.destroy();
-            network = new vis.Network(container, data, options);
+            try {
+                network = new vis.Network(container, data, options);
+                logDebug("Объект Network создан");
+            } catch (e) {
+                logDebug(`Ошибка создания Network: ${e.message}`, true);
+            }
 
             // Force fit and redraw
             network.once("afterDrawing", function() {
                 network.fit();
-                console.log("Graph fit complete");
+                logDebug("Авто-масштаб выполнен");
             });
 
             // Hide loading overlay after stabilization or 3 seconds max
