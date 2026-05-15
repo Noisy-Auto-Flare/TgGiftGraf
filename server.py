@@ -125,19 +125,41 @@ async def get_user_graph(identifier: str, depth: int = 1):
     }
 
 @app.get("/api/graph/global")
-async def get_global_graph(limit: int = 100):
+async def get_global_graph(
+    limit: int = 1000, 
+    min_edges: int = 0,
+    min_incoming: int = 0,
+    min_outgoing: int = 0
+):
     conn = get_db_connection()
     cursor = conn.cursor()
     
-    # Получаем топ-пользователей по количеству связей или охвату
-    cursor.execute("""
-        SELECT u.id, u.username, u.first_name, u.has_photo, c.cluster_id
-        FROM users u
-        LEFT JOIN user_clusters c ON u.id = c.user_id
-        WHERE u.id IN (SELECT from_user_id FROM edges UNION SELECT to_user_id FROM edges)
-        ORDER BY (SELECT COUNT(*) FROM edges e WHERE e.from_user_id = u.id OR e.to_user_id = u.id) DESC
+    # Сложный запрос с фильтрацией
+    # Мы считаем агрегаты для каждого пользователя и фильтруем их
+    query = """
+        WITH user_stats AS (
+            SELECT 
+                u.id, 
+                u.username, 
+                u.first_name, 
+                u.has_photo,
+                (SELECT COUNT(*) FROM edges e WHERE e.from_user_id = u.id OR e.to_user_id = u.id) as total_edges,
+                (SELECT SUM(weight) FROM edges e WHERE e.to_user_id = u.id) as total_incoming,
+                (SELECT SUM(weight) FROM edges e WHERE e.from_user_id = u.id) as total_outgoing
+            FROM users u
+            WHERE u.id IN (SELECT from_user_id FROM edges UNION SELECT to_user_id FROM edges)
+        )
+        SELECT s.*, c.cluster_id
+        FROM user_stats s
+        LEFT JOIN user_clusters c ON s.id = c.user_id
+        WHERE s.total_edges >= ? 
+          AND IFNULL(s.total_incoming, 0) >= ? 
+          AND IFNULL(s.total_outgoing, 0) >= ?
+        ORDER BY s.total_edges DESC
         LIMIT ?
-    """, (limit,))
+    """
+    
+    cursor.execute(query, (min_edges, min_incoming, min_outgoing, limit))
     nodes_rows = cursor.fetchall()
     
     nodes_ids = [row['id'] for row in nodes_rows]
@@ -153,7 +175,12 @@ async def get_global_graph(limit: int = 100):
             "username": row['username'],
             "first_name": row['first_name'],
             "cluster": row['cluster_id'],
-            "has_photo": bool(row['has_photo'])
+            "has_photo": bool(row['has_photo']),
+            "stats": {
+                "edges": row['total_edges'],
+                "incoming": row['total_incoming'] or 0,
+                "outgoing": row['total_outgoing'] or 0
+            }
         })
     
     # Получаем рёбра только МЕЖДУ пользователями из нашего списка узлов
@@ -168,12 +195,14 @@ async def get_global_graph(limit: int = 100):
         
         edges = []
         for row in edges_rows:
-            length = max(50, 300 - row['weight'] * 20)
+            # Для общего графа делаем длину более стандартной, 
+            # но зависящей от веса для "стягивания" активных узлов
+            length = max(100, 400 - row['weight'] * 10)
             edges.append({
                 "from": row['from_user_id'],
                 "to": row['to_user_id'],
                 "weight": row['weight'],
-                "label": str(row['weight']), # Число подарков над стрелкой
+                "label": str(row['weight']), 
                 "length": length,
                 "title": f"Подарков: {row['weight']}"
             })

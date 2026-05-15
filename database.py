@@ -58,9 +58,11 @@ def init_db():
     )
     ''')
 
-    # Индексы для ускорения работы очереди
+    # Индексы для ускорения работы очереди и поиска связей
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_queue_priority ON crawl_queue(priority DESC, added_at ASC)')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_users_last_scanned ON users(last_scanned)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_edges_to_user ON edges(to_user_id)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_edges_from_user ON edges(from_user_id)')
 
     # Таблицы для аналитики
     cursor.execute('''
