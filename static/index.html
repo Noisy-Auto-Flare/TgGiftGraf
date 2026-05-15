@@ -680,13 +680,14 @@
                 return;
             }
 
+            const showAvatars = nodesData.length <= 500;
             const nodes = new vis.DataSet(nodesData.map(node => {
-                const photo = node.has_photo ? `/avatars/${node.id}.jpg` : null;
+                const photo = (showAvatars && node.has_photo) ? `/avatars/${node.id}.jpg` : null;
                 return {
                     id: node.id,
                     label: node.label,
                     shape: photo ? 'circularImage' : 'dot',
-                    image: photo || '',
+                    image: photo,
                     size: isGlobal ? 20 : 30,
                     color: {
                         background: colorPalette[node.cluster % colorPalette.length] || '#38bdf8',
@@ -697,10 +698,10 @@
                         color: '#f8fafc', 
                         size: isGlobal ? 10 : 12, 
                         face: 'Inter',
-                        strokeWidth: 0 // Улучшает производительность при отдалении
+                        strokeWidth: 0
                     },
                     borderWidth: 2,
-                    shadow: false // Отключаем тени для скорости
+                    shadow: false
                 };
             }));
 
@@ -733,6 +734,9 @@
             const data = { nodes, edges };
             
             const options = {
+                nodes: {
+                    brokenImage: "https://ui-avatars.com/api/?name=?", // Fallback для битых фото
+                },
                 physics: {
                     enabled: true,
                     solver: isGlobal ? 'forceAtlas2Based' : 'barnesHut',
@@ -752,7 +756,7 @@
                     },
                     stabilization: {
                         enabled: true,
-                        iterations: isGlobal ? 2000 : 200, // Увеличиваем итерации для статики
+                        iterations: isGlobal ? 800 : 150, // Уменьшаем для скорости
                         updateInterval: 50,
                         onlyDynamicEdges: false,
                         fit: true
@@ -781,6 +785,11 @@
             try {
                 network = new vis.Network(container, data, options);
                 
+                network.on("stabilizationProgress", function(params) {
+                    const progress = Math.round((params.iterations / params.total) * 100);
+                    showLoading(`Стабилизация: ${progress}%`);
+                });
+
                 if (isGlobal) {
                     // Для глобального графа ждем полной стабилизации
                     network.once("stabilizationIterationsDone", function() {
@@ -816,46 +825,49 @@
                 hideLoading();
             }
             
-            setTimeout(hideLoading, 3000);
+            // Гарантированное скрытие загрузки через 10 секунд, если стабилизация зависла
+            setTimeout(() => {
+                const loader = document.getElementById('loading-overlay');
+                if (loader.style.display !== 'none') {
+                    logDebug("Принудительное завершение загрузки по тайм-ауту");
+                    if (network) {
+                        network.setOptions({ physics: { enabled: false } });
+                        network.fit();
+                    }
+                    hideLoading();
+                }
+            }, 10000);
         }
 
+        let lastQuality = 'high';
         function adjustQuality() {
             if (!network) return;
             const zoom = network.getScale();
+            let newQuality = 'high';
             
-            // Динамическое повышение качества при приближении
-            if (zoom > 0.8) {
+            if (zoom > 0.8) newQuality = 'high';
+            else if (zoom > 0.4) newQuality = 'medium';
+            else newQuality = 'low';
+
+            if (newQuality === lastQuality) return;
+            lastQuality = newQuality;
+
+            logDebug(`Смена качества: ${newQuality}`);
+            
+            if (newQuality === 'high') {
                 network.setOptions({
-                    nodes: {
-                        font: { strokeWidth: 2, size: 12 },
-                        shadow: true
-                    },
-                    edges: {
-                        font: { size: 10 },
-                        smooth: { type: 'continuous' }
-                    }
+                    nodes: { font: { size: 12 }, shadow: true },
+                    edges: { font: { size: 10 }, smooth: { type: 'continuous' } }
                 });
-            } else if (zoom > 0.4) {
+            } else if (newQuality === 'medium') {
                 network.setOptions({
-                    nodes: {
-                        font: { strokeWidth: 1, size: 10 },
-                        shadow: false
-                    },
-                    edges: {
-                        font: { size: 0 }, // Скрываем текст ребер
-                        smooth: false
-                    }
+                    nodes: { font: { size: 10 }, shadow: false },
+                    edges: { font: { size: 0 }, smooth: false }
                 });
             } else {
                 network.setOptions({
-                    nodes: {
-                        font: { size: 0 }, // Скрываем текст узлов при сильном удалении
-                        shadow: false
-                    },
-                    edges: {
-                        font: { size: 0 },
-                        smooth: false
-                    }
+                    nodes: { font: { size: 0 }, shadow: false },
+                    edges: { font: { size: 0 }, smooth: false }
                 });
             }
         }
