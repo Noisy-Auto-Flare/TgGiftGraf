@@ -750,9 +750,9 @@
                         gravitationalConstant: -2000,
                         centralGravity: 0.3,
                         springLength: 150,
-                        springConstant: 0.05,
-                        damping: 0.5, // Увеличено с 0.09 до 0.5 для гашения колебаний
-                        avoidOverlap: 0.5 // Снижено для более мягкого взаимодействия
+                        springConstant: 0.04,
+                        damping: 0.09,
+                        avoidOverlap: 1
                     },
                     forceAtlas2Based: {
                         gravitationalConstant: -100,
@@ -764,8 +764,8 @@
                     },
                     stabilization: {
                         enabled: true,
-                        iterations: isSmallGraph ? 200 : 800,
-                        updateInterval: 50,
+                        iterations: isSmallGraph ? 150 : 800,
+                        updateInterval: 25,
                         onlyDynamicEdges: false,
                         fit: true
                     }
@@ -799,13 +799,8 @@
                 });
 
                 network.once("stabilizationIterationsDone", function() {
-                    if (isSmallGraph) {
-                        logDebug("Малый граф: физика остается активной");
-                        // Не отключаем физику для малых графов
-                    } else {
-                        logDebug("Большой граф: физика отключена для производительности");
-                        network.setOptions({ physics: { enabled: false } });
-                    }
+                    logDebug("Стабилизация завершена, фиксирую узлы");
+                    network.setOptions({ physics: { enabled: false } });
                     network.fit();
                     hideLoading();
                 });
