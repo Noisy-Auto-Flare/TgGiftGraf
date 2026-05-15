@@ -156,15 +156,27 @@ async def process_user(client, conn, target_user_id):
         return
 
     try:
-        # Получаем input_entity с обработкой ошибок
-        await human_delay(1, 2)
+        # Получаем полную сущность для надежности
+        await human_delay(0.5, 1)
         try:
-            input_entity = await client.get_input_entity(target_user_id)
-        except (errors.UserIdInvalidError, ValueError):
-            logger.warning(f"Не удалось получить input_entity для {target_user_id}. Удаляем из очереди.")
+            full_entity = await client.get_entity(target_user_id)
+            input_entity = await client.get_input_entity(full_entity)
+        except (errors.UserIdInvalidError, ValueError) as e:
+            logger.warning(f"Не удалось получить сущность для {target_user_id}: {e}. Удаляем из очереди.")
             cursor.execute("DELETE FROM crawl_queue WHERE user_id = ?", (target_user_id,))
             conn.commit()
             return
+
+        # Проверка количества подарков через FullUser (опционально, для отладки)
+        try:
+            full_user = await client(functions.users.GetFullUserRequest(id=input_entity))
+            star_gifts_count = getattr(full_user.full_user, 'star_gifts_count', 0)
+            if star_gifts_count > 0:
+                logger.info(f"У пользователя {target_user_id} должно быть {star_gifts_count} подарков (согласно FullUser)")
+            else:
+                logger.info(f"У пользователя {target_user_id} 0 подарков согласно FullUser")
+        except Exception as e:
+            logger.debug(f"Не удалось получить FullUser для {target_user_id}: {e}")
 
         # Нативный запрос подарков
         logger.info(f"Запрос подарков для {target_user_id}...")
@@ -175,7 +187,20 @@ async def process_user(client, conn, target_user_id):
         GetSavedStarGiftsRequest = getattr(functions.payments, 'GetSavedStarGiftsRequest', None)
         
         gifts_res = None
-        if GetUserGiftsRequest:
+        # Сначала пробуем GetSavedStarGiftsRequest (наиболее актуальный для Star Gifts)
+        if GetSavedStarGiftsRequest:
+            try:
+                # Пробуем без лишних параметров
+                gifts_res = await client(GetSavedStarGiftsRequest(
+                    peer=input_entity,
+                    offset='',
+                    limit=100
+                ))
+            except Exception as e:
+                logger.debug(f"GetSavedStarGiftsRequest failed: {e}")
+
+        # Если не сработало, пробуем старый GetUserGiftsRequest (если он есть)
+        if not gifts_res and GetUserGiftsRequest:
             try:
                 gifts_res = await client(GetUserGiftsRequest(
                     user_id=input_entity,
@@ -185,29 +210,38 @@ async def process_user(client, conn, target_user_id):
             except Exception as e:
                 logger.debug(f"GetUserGiftsRequest failed: {e}")
 
-        if not gifts_res and GetSavedStarGiftsRequest:
-            try:
-                gifts_res = await client(GetSavedStarGiftsRequest(
-                    peer=input_entity,
-                    offset='',
-                    limit=100
-                ))
-            except Exception as e:
-                logger.debug(f"GetSavedStarGiftsRequest failed: {e}")
-
         if not gifts_res:
-            logger.error("Ваша версия Telethon не поддерживает получение подарков или метод недоступен. Пожалуйста, обновите: pip install --upgrade telethon")
-            # Помечаем пользователя, чтобы не зацикливаться, но не удаляем (вдруг обновите)
+            logger.warning(f"Метод получения подарков не вернул результат для {target_user_id}")
+            # Помечаем пользователя, чтобы не зацикливаться
             cursor.execute("UPDATE users SET last_scanned = ? WHERE id = ?", (int(time.time()), target_user_id))
             cursor.execute("DELETE FROM crawl_queue WHERE user_id = ?", (target_user_id,))
             conn.commit()
             return
 
-        if hasattr(gifts_res, 'gifts'):
+        gift_count = 0
+        if hasattr(gifts_res, 'gifts') and gifts_res.gifts:
+            gift_count = len(gifts_res.gifts)
+            logger.info(f"Успешно получено {gift_count} подарков для {target_user_id}")
+            
+            # Сохраняем пользователей, пришедших в ответе (это отправители подарков)
+            user_map = {}
+            if hasattr(gifts_res, 'users'):
+                for u in gifts_res.users:
+                    if isinstance(u, types.User):
+                        user_map[u.id] = u
+                        if not u.bot:
+                            cursor.execute('''
+                                INSERT INTO users (id, username, first_name, discovery_source, is_bot) 
+                                VALUES (?, ?, ?, 'gift_list', 0)
+                                ON CONFLICT(id) DO UPDATE SET 
+                                    username = COALESCE(excluded.username, users.username),
+                                    first_name = COALESCE(excluded.first_name, users.first_name)
+                            ''', (u.id, u.username, (u.first_name or "") + (" " + u.last_name if u.last_name else "")))
+
             for gift_attr in gifts_res.gifts:
                 from_id = getattr(gift_attr, 'from_id', None)
                 
-                # Конвертируем дату в timestamp если это datetime
+                # Конвертируем дату
                 gift_date_obj = getattr(gift_attr, 'date', 0)
                 if isinstance(gift_date_obj, int):
                     gift_date = gift_date_obj
@@ -218,21 +252,36 @@ async def process_user(client, conn, target_user_id):
                 
                 gift_title = "Подарок"
                 if hasattr(gift_attr, 'gift'):
-                    gift_title = f"Gift #{gift_attr.gift.id}"
+                    g_obj = gift_attr.gift
+                    if hasattr(g_obj, 'id'):
+                        gift_title = f"Gift #{g_obj.id}"
+                    if hasattr(g_obj, 'sticker') and hasattr(g_obj.sticker, 'alt'):
+                        gift_title = f"Gift {g_obj.sticker.alt}"
 
-                if from_id:
-                    # Обработка отправителя
-                    u_info = await get_user_info(client, from_id)
+                # Если from_id - это PeerUser, извлекаем ID
+                sender_id = None
+                if isinstance(from_id, types.PeerUser):
+                    sender_id = from_id.user_id
+                elif isinstance(from_id, int):
+                    sender_id = from_id
+
+                if sender_id:
+                    # Проверяем, есть ли отправитель в нашем мапе из ответа
+                    u_info = None
+                    if sender_id in user_map:
+                        u = user_map[sender_id]
+                        u_info = {
+                            'id': u.id,
+                            'username': u.username,
+                            'first_name': (u.first_name or "") + (" " + u.last_name if u.last_name else ""),
+                            'is_bot': u.bot
+                        }
+                    else:
+                        # Если нет в мапе, запрашиваем отдельно
+                        u_info = await get_user_info(client, sender_id)
+
                     if u_info and not u_info['is_bot']:
-                        cursor.execute('''
-                            INSERT INTO users (id, username, first_name, discovery_source, is_bot) 
-                            VALUES (?, ?, ?, 'gift', ?) 
-                            ON CONFLICT(id) DO UPDATE SET 
-                                username = COALESCE(excluded.username, users.username), 
-                                first_name = COALESCE(excluded.first_name, users.first_name),
-                                is_bot = excluded.is_bot
-                        ''', (u_info['id'], u_info['username'], u_info['first_name'], 0))
-                        
+                        # Сохраняем связь
                         cursor.execute('''
                             INSERT INTO edges (from_user_id, to_user_id, weight, last_gift_title, last_gift_date)
                             VALUES (?, ?, 1, ?, ?)
@@ -242,7 +291,10 @@ async def process_user(client, conn, target_user_id):
                                 last_gift_date = excluded.last_gift_date
                         ''', (u_info['id'], target_user_id, gift_title, gift_date))
                         
+                        # Добавляем отправителя в очередь на сканирование
                         await add_to_queue(conn, u_info['id'], priority=0, source='gift')
+        else:
+            logger.info(f"У пользователя {target_user_id} не найдено публичных подарков (список пуст).")
 
         # Помечаем как просканированный
         cursor.execute("UPDATE users SET last_scanned = ? WHERE id = ?", (int(time.time()), target_user_id))
