@@ -68,18 +68,21 @@ async def download_profile_photo(client, user_id, entity, full_user_obj=None):
     return False
 
 async def get_user_info(client, entity_id):
-    """Получает информацию о пользователе с обработкой ошибок и паузой."""
+    """Получает детальную информацию о пользователе."""
     try:
-        # Пауза перед запросом
         await human_delay(0.5, 1.5)
         entity = await client.get_entity(entity_id)
         
         full_user_obj = None
-        # Если основного фото нет, пробуем получить FullUser для публичного фото
-        if not getattr(entity, 'photo', None):
-            try:
-                full_user_obj = await client(functions.users.GetFullUserRequest(id=entity))
-            except: pass
+        # Запрашиваем FullUser ТОЛЬКО если фото нет на диске И оно скрыто в основном объекте
+        photo_path = f"static/avatars/{entity.id}.jpg"
+        if not (os.path.exists(photo_path) and os.path.getsize(photo_path) > 0):
+            if not getattr(entity, 'photo', None):
+                try:
+                    logger.debug(f"Основное фото скрыто для {entity.id}, пробуем получить публичное...")
+                    full_user_obj = await client(functions.users.GetFullUserRequest(id=entity))
+                except Exception as e:
+                    logger.debug(f"Не удалось получить FullUser для {entity.id}: {e}")
             
         has_photo = await download_profile_photo(client, entity.id, entity, full_user_obj)
         if isinstance(entity, types.User):
@@ -213,30 +216,25 @@ async def process_user(client, conn, target_user_id):
         try:
             full_entity = await client.get_entity(target_user_id)
             input_entity = await client.get_input_entity(full_entity)
-            has_photo = await download_profile_photo(client, target_user_id, full_entity)
-            cursor.execute("UPDATE users SET has_photo = ? WHERE id = ?", (1 if has_photo else 0, target_user_id))
+            
+            full_user = None
+            # Если фото нет на диске И оно скрыто, пробуем получить публичное через FullUser
+            photo_path = f"static/avatars/{target_user_id}.jpg"
+            if not (os.path.exists(photo_path) and os.path.getsize(photo_path) > 0):
+                if not getattr(full_entity, 'photo', None):
+                    try:
+                        full_user = await client(functions.users.GetFullUserRequest(id=input_entity))
+                    except Exception as e:
+                        logger.debug(f"Не удалось получить FullUser для {target_user_id}: {e}")
+
+            # Пытаемся скачать фото, теперь с поддержкой FullUser (fallback photo)
+            has_photo_now = await download_profile_photo(client, target_user_id, full_entity, full_user)
+            cursor.execute("UPDATE users SET has_photo = ? WHERE id = ?", (1 if has_photo_now else 0, target_user_id))
         except (errors.UserIdInvalidError, ValueError) as e:
             logger.warning(f"Не удалось получить сущность для {target_user_id}: {e}. Удаляем из очереди.")
             cursor.execute("DELETE FROM crawl_queue WHERE user_id = ?", (target_user_id,))
             conn.commit()
             return
-
-        # Проверка количества подарков через FullUser
-        star_gifts_count = 0
-        full_user = None
-        try:
-            full_user = await client(functions.users.GetFullUserRequest(id=input_entity))
-            star_gifts_count = getattr(full_user.full_user, 'star_gifts_count', 0)
-            if star_gifts_count > 0:
-                logger.info(f"У пользователя {target_user_id} должно быть {star_gifts_count} подарков (согласно FullUser)")
-            else:
-                logger.info(f"У пользователя {target_user_id} 0 подарков согласно FullUser")
-        except Exception as e:
-            logger.debug(f"Не удалось получить FullUser для {target_user_id}: {e}")
-
-        # Пытаемся скачать фото, теперь с поддержкой FullUser (fallback photo)
-        has_photo_now = await download_profile_photo(client, target_user_id, full_entity, full_user)
-        cursor.execute("UPDATE users SET has_photo = ? WHERE id = ?", (1 if has_photo_now else 0, target_user_id))
         
         # Нативный запрос подарков
         logger.info(f"Запрос подарков для {target_user_id}...")
@@ -336,8 +334,9 @@ async def process_user(client, conn, target_user_id):
                         u_info = await get_user_info(client, sender_id)
 
                     if u_info and not u_info['is_bot']:
-                        # Пытаемся скачать фото для отправителя, если его еще нет
-                        if not u_info.get('has_photo'):
+                        # Пытаемся скачать фото для отправителя, если его еще нет на диске
+                        photo_path = f"static/avatars/{u_info['id']}.jpg"
+                        if not (os.path.exists(photo_path) and os.path.getsize(photo_path) > 0):
                             try:
                                 sender_entity = await client.get_entity(u_info['id'])
                                 sender_full = None
