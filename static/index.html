@@ -683,22 +683,24 @@
             const showAvatars = nodesData.length <= 500;
             const nodes = new vis.DataSet(nodesData.map(node => {
                 const photo = (showAvatars && node.has_photo) ? `/avatars/${node.id}.jpg` : null;
+                const clusterColor = colorPalette[node.cluster % colorPalette.length] || '#38bdf8';
+                
                 return {
                     id: node.id,
                     label: node.label,
                     shape: photo ? 'circularImage' : 'dot',
-                    image: photo,
+                    image: photo || undefined, // undefined лучше чем null для vis-network
                     size: isGlobal ? 20 : 30,
                     color: {
-                        background: colorPalette[node.cluster % colorPalette.length] || '#38bdf8',
+                        background: clusterColor,
                         border: '#ffffff',
-                        highlight: { background: '#ffffff', border: '#38bdf8' }
+                        highlight: { background: '#ffffff', border: '#38bdf8' },
+                        hover: { background: '#ffffff', border: '#38bdf8' }
                     },
                     font: { 
                         color: '#f8fafc', 
                         size: isGlobal ? 10 : 12, 
-                        face: 'Inter',
-                        strokeWidth: 0
+                        face: 'Inter'
                     },
                     borderWidth: 2,
                     shadow: false
@@ -713,10 +715,11 @@
                 color: { 
                     color: 'rgba(148, 163, 184, 0.3)', 
                     highlight: '#38bdf8',
-                    hover: 'rgba(56, 189, 248, 0.8)'
+                    hover: '#38bdf8',
+                    inherit: false // Явное отключение наследования помогает избежать null-ошибок
                 },
                 arrows: { to: { enabled: true, scaleFactor: 0.5 } },
-                label: isGlobal ? '' : (edge.label || ''), // Не грузим метки на общем графе сразу
+                label: isGlobal ? '' : (edge.label || ''),
                 font: { 
                     color: '#38bdf8', 
                     size: 10, 
@@ -727,7 +730,7 @@
                 width: 1,
                 hoverWidth: 2,
                 selectionWidth: 2,
-                smooth: isGlobal ? false : { type: 'continuous' } // Прямые линии быстрее для общего графа
+                smooth: isGlobal ? false : { type: 'continuous' }
             })));
 
             const container = document.getElementById('graph-container');
@@ -841,7 +844,8 @@
 
         let lastQuality = 'high';
         function adjustQuality() {
-            if (!network) return;
+            if (!network || !network.body) return; // Проверка на инициализацию
+            
             const zoom = network.getScale();
             let newQuality = 'high';
             
@@ -854,21 +858,25 @@
 
             logDebug(`Смена качества: ${newQuality}`);
             
-            if (newQuality === 'high') {
-                network.setOptions({
-                    nodes: { font: { size: 12 }, shadow: true },
-                    edges: { font: { size: 10 }, smooth: { type: 'continuous' } }
-                });
-            } else if (newQuality === 'medium') {
-                network.setOptions({
-                    nodes: { font: { size: 10 }, shadow: false },
-                    edges: { font: { size: 0 }, smooth: false }
-                });
-            } else {
-                network.setOptions({
-                    nodes: { font: { size: 0 }, shadow: false },
-                    edges: { font: { size: 0 }, smooth: false }
-                });
+            try {
+                if (newQuality === 'high') {
+                    network.setOptions({
+                        nodes: { font: { size: 12 }, shadow: { enabled: true } },
+                        edges: { font: { size: 10 }, smooth: { enabled: true, type: 'continuous' } }
+                    });
+                } else if (newQuality === 'medium') {
+                    network.setOptions({
+                        nodes: { font: { size: 10 }, shadow: { enabled: false } },
+                        edges: { font: { size: 0 }, smooth: { enabled: false } }
+                    });
+                } else {
+                    network.setOptions({
+                        nodes: { font: { size: 0 }, shadow: { enabled: false } },
+                        edges: { font: { size: 0 }, smooth: { enabled: false } }
+                    });
+                }
+            } catch (e) {
+                console.warn("Ошибка при смене качества:", e);
             }
         }
 
