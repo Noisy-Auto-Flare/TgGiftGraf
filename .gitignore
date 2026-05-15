@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+*$py.class
+.env
+venv/
+env/
+*.db
+*.db-journal
+*.session
+*.session-journal
+crawler.log
+static/*.html
+!static/index.html
+.DS_Store

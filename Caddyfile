@@ -1,0 +1,23 @@
+{
+    # Глобальные настройки
+    email admin@example.com
+}
+
+your-domain.com {
+    # Путь к статическим файлам
+    root * /opt/giftgraph/static
+    file_server
+
+    # Проксирование API запросов на FastAPI
+    handle_path /api/* {
+        reverse_proxy localhost:8000
+    }
+
+    # Логирование
+    log {
+        output file /var/log/caddy/giftgraph.log
+    }
+
+    # Сжатие
+    encode gzip
+}

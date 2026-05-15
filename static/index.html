@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Telegram Gift Graph</title>
+    <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+    <style>
+        :root {
+            --bg-color: #0f172a;
+            --card-bg: #1e293b;
+            --text-color: #f1f5f9;
+            --accent-color: #38bdf8;
+            --border-color: #334155;
+        }
+        body {
+            margin: 0;
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+        }
+        header {
+            padding: 1rem 2rem;
+            background-color: var(--card-bg);
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .search-container {
+            position: relative;
+            width: 300px;
+        }
+        input#search {
+            width: 100%;
+            padding: 0.5rem 1rem;
+            border-radius: 0.5rem;
+            border: 1px solid var(--border-color);
+            background: var(--bg-color);
+            color: var(--text-color);
+        }
+        #search-results {
+            position: absolute;
+            top: 100%;
+            left: 0;
+            right: 0;
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 0 0 0.5rem 0.5rem;
+            z-index: 1000;
+            max-height: 200px;
+            overflow-y: auto;
+            display: none;
+        }
+        .search-item {
+            padding: 0.5rem 1rem;
+            cursor: pointer;
+        }
+        .search-item:hover {
+            background: var(--accent-color);
+            color: white;
+        }
+        main {
+            display: flex;
+            flex: 1;
+            overflow: hidden;
+        }
+        #graph-container {
+            flex: 1;
+            background: var(--bg-color);
+        }
+        #sidebar {
+            width: 350px;
+            background: var(--card-bg);
+            border-left: 1px solid var(--border-color);
+            padding: 1.5rem;
+            overflow-y: auto;
+        }
+        .stats-card {
+            background: var(--bg-color);
+            padding: 1rem;
+            border-radius: 0.75rem;
+            margin-bottom: 1.5rem;
+            border: 1px solid var(--border-color);
+        }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1rem;
+        }
+        .stat-item .label {
+            font-size: 0.75rem;
+            color: #94a3b8;
+        }
+        .stat-item .value {
+            font-size: 1.25rem;
+            font-weight: bold;
+            color: var(--accent-color);
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.875rem;
+        }
+        th, td {
+            text-align: left;
+            padding: 0.5rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+        th { color: #94a3b8; }
+        .cluster-dot {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            margin-right: 5px;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div style="font-size: 1.5rem; font-weight: bold;">Telegram Gift Graph</div>
+        <div class="search-container">
+            <input type="text" id="search" placeholder="Поиск пользователя..." autocomplete="off">
+            <div id="search-results"></div>
+        </div>
+    </header>
+    <main>
+        <div id="graph-container"></div>
+        <aside id="sidebar">
+            <div id="user-info">
+                <h3>Выберите пользователя</h3>
+                <p>Кликните по узлу или используйте поиск</p>
+            </div>
+            <div class="stats-card" id="user-stats" style="display: none;">
+                <h4>Статистика</h4>
+                <div class="stats-grid">
+                    <div class="stat-item">
+                        <div class="label">Получено</div>
+                        <div class="value" id="stat-incoming">0</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="label">Отправлено</div>
+                        <div class="value" id="stat-outgoing">0</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="label">Соседей</div>
+                        <div class="value" id="stat-neighbors">0</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="label">Охват (5 ш.)</div>
+                        <div class="value" id="stat-reach">0</div>
+                    </div>
+                </div>
+            </div>
+            <div class="stats-card">
+                <h4>Топ охвата (5 шагов)</h4>
+                <table id="top-reach-table">
+                    <thead>
+                        <tr>
+                            <th>#</th>
+                            <th>Пользователь</th>
+                            <th>Охват</th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        </aside>
+    </main>
+
+    <script>
+        let network = null;
+        let currentUsername = null;
+        const colorPalette = ['#f87171', '#fb923c', '#fbbf24', '#facc15', '#a3e635', '#4ade80', '#34d399', '#2dd4bf', '#22d3ee', '#38bdf8', '#818cf8', '#a78bfa', '#c084fc', '#e879f9', '#f472b6', '#fb7185'];
+
+        const searchInput = document.getElementById('search');
+        const searchResults = document.getElementById('search-results');
+
+        // Поиск с debounce
+        let debounceTimer;
+        searchInput.addEventListener('input', (e) => {
+            clearTimeout(debounceTimer);
+            const q = e.target.value;
+            if (q.length < 2) {
+                searchResults.style.display = 'none';
+                return;
+            }
+            debounceTimer = setTimeout(async () => {
+                const res = await fetch(`/api/users/search?q=${encodeURIComponent(q)}`);
+                const data = await res.json();
+                renderSearchResults(data);
+            }, 300);
+        });
+
+        function renderSearchResults(users) {
+            searchResults.innerHTML = '';
+            if (users.length === 0) {
+                searchResults.style.display = 'none';
+                return;
+            }
+            users.forEach(u => {
+                const div = document.createElement('div');
+                div.className = 'search-item';
+                div.textContent = u.username ? `@${u.username}` : u.first_name || `id${u.id}`;
+                div.onclick = () => {
+                    loadGraph(u.username || u.id);
+                    searchResults.style.display = 'none';
+                    searchInput.value = '';
+                };
+                searchResults.appendChild(div);
+            });
+            searchResults.style.display = 'block';
+        }
+
+        async function loadGraph(identifier) {
+            currentUsername = identifier;
+            const res = await fetch(`/api/users/${identifier}/graph`);
+            if (!res.ok) return;
+            const data = await res.json();
+            renderGraph(data);
+            updateStats(data.stats, data.nodes.find(n => n.id === data.stats.user_id));
+        }
+
+        function renderGraph(data) {
+            const container = document.getElementById('graph-container');
+            
+            const nodes = new vis.DataSet(data.nodes.map(n => ({
+                id: n.id,
+                label: n.label,
+                title: n.first_name || n.label,
+                color: n.cluster !== null ? colorPalette[n.cluster % colorPalette.length] : '#94a3b8',
+                font: { color: '#f1f5f9' }
+            })));
+
+            const edges = new vis.DataSet(data.edges.map(e => ({
+                from: e.from,
+                to: e.to,
+                value: e.weight,
+                title: e.title,
+                width: Math.min(e.weight, 10),
+                arrows: 'to',
+                color: { color: '#334155', highlight: '#38bdf8' }
+            })));
+
+            const options = {
+                nodes: { shape: 'dot', size: 20 },
+                physics: {
+                    solver: 'forceAtlas2Based',
+                    forceAtlas2Based: {
+                        gravitationalConstant: -50,
+                        springConstant: 0.08,
+                        springLength: 100,
+                        damping: 0.4
+                    },
+                    stabilization: { iterations: 150 }
+                },
+                interaction: { hover: true, tooltipDelay: 200 }
+            };
+
+            if (network) network.destroy();
+            network = new vis.Network(container, { nodes, edges }, options);
+
+            network.on("click", (params) => {
+                if (params.nodes.length > 0) {
+                    const nodeId = params.nodes[0];
+                    const node = data.nodes.find(n => n.id === nodeId);
+                    loadGraph(node.username || node.id);
+                }
+            });
+        }
+
+        function updateStats(stats, userInfo) {
+            const sourceMap = {
+                'start': 'Начальная точка',
+                'chat': 'Из чата',
+                'gift': 'По цепочке подарков',
+                'unknown': 'Неизвестно'
+            };
+            document.getElementById('user-info').innerHTML = `
+                <h3>${userInfo.username ? '@' + userInfo.username : userInfo.label}</h3>
+                <p>${userInfo.first_name || ''}</p>
+                <p style="font-size: 0.75rem; color: #94a3b8;">Источник: ${sourceMap[userInfo.source] || userInfo.source}</p>
+            `;
+            document.getElementById('user-stats').style.display = 'block';
+            document.getElementById('stat-incoming').textContent = stats.incoming_gifts;
+            document.getElementById('stat-outgoing').textContent = stats.outgoing_gifts;
+            document.getElementById('stat-neighbors').textContent = stats.neighbors;
+            document.getElementById('stat-reach').textContent = stats.reach_5;
+        }
+
+        async function updateTopReach() {
+            const res = await fetch('/api/stats/top-reach?limit=10');
+            const data = await res.json();
+            const tbody = document.querySelector('#top-reach-table tbody');
+            tbody.innerHTML = '';
+            data.forEach((u, i) => {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td>${i + 1}</td>
+                    <td style="cursor:pointer;color:var(--accent-color)" onclick="loadGraph('${u.username || u.id}')">
+                        ${u.username ? '@' + u.username : u.first_name || 'id' + u.id}
+                    </td>
+                    <td>${u.reach_count}</td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+
+        // Поллинг
+        setInterval(() => {
+            if (currentUsername) loadGraph(currentUsername);
+            updateTopReach();
+        }, 30000);
+
+        // Инициализация
+        updateTopReach();
+        // Можно загрузить первого из топа при старте
+        setTimeout(async () => {
+            const res = await fetch('/api/stats/top-reach?limit=1');
+            const data = await res.json();
+            if (data.length > 0) loadGraph(data[0].username || data[0].id);
+        }, 1000);
+    </script>
+</body>
+</html>
