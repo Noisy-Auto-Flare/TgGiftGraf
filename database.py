@@ -21,7 +21,8 @@ def init_db():
         first_name TEXT,
         last_scanned INTEGER DEFAULT 0,
         discovery_source TEXT DEFAULT 'unknown',
-        is_bot INTEGER DEFAULT 0
+        is_bot INTEGER DEFAULT 0,
+        has_photo INTEGER DEFAULT 0
     )
     ''')
 

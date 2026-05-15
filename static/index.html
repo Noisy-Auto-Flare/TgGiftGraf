@@ -3,192 +3,343 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Telegram Gift Graph</title>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
     <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
     <style>
         :root {
-            --bg-color: #0f172a;
-            --card-bg: #1e293b;
-            --text-color: #f1f5f9;
+            --bg-color: #0b0e14;
+            --card-bg: rgba(30, 41, 59, 0.7);
+            --text-primary: #f8fafc;
+            --text-secondary: #94a3b8;
             --accent-color: #38bdf8;
-            --border-color: #334155;
+            --accent-glow: rgba(56, 189, 248, 0.3);
+            --border-color: rgba(51, 65, 85, 0.5);
+            --glass-bg: rgba(15, 23, 42, 0.8);
+            --glass-border: rgba(255, 255, 255, 0.1);
         }
         body {
             margin: 0;
             font-family: 'Inter', sans-serif;
             background-color: var(--bg-color);
-            color: var(--text-color);
+            background-image: 
+                radial-gradient(at 0% 0%, rgba(56, 189, 248, 0.1) 0px, transparent 50%),
+                radial-gradient(at 100% 100%, rgba(139, 92, 246, 0.1) 0px, transparent 50%);
+            color: var(--text-primary);
             display: flex;
             flex-direction: column;
             height: 100vh;
+            overflow: hidden;
         }
         header {
-            padding: 1rem 2rem;
-            background-color: var(--card-bg);
-            border-bottom: 1px solid var(--border-color);
+            padding: 0.75rem 2rem;
+            background: var(--glass-bg);
+            backdrop-filter: blur(12px);
+            border-bottom: 1px solid var(--glass-border);
             display: flex;
             justify-content: space-between;
             align-items: center;
+            z-index: 100;
+        }
+        .logo {
+            font-size: 1.25rem;
+            font-weight: 700;
+            background: linear-gradient(to right, #38bdf8, #818cf8);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            letter-spacing: -0.025em;
         }
         .search-container {
             position: relative;
-            width: 300px;
+            width: 320px;
         }
         input#search {
             width: 100%;
-            padding: 0.5rem 1rem;
-            border-radius: 0.5rem;
-            border: 1px solid var(--border-color);
-            background: var(--bg-color);
-            color: var(--text-color);
+            padding: 0.6rem 1.25rem;
+            border-radius: 9999px;
+            border: 1px solid var(--glass-border);
+            background: rgba(255, 255, 255, 0.05);
+            color: var(--text-primary);
+            font-size: 0.875rem;
+            transition: all 0.2s;
+            outline: none;
+        }
+        input#search:focus {
+            border-color: var(--accent-color);
+            box-shadow: 0 0 0 4px var(--accent-glow);
+            background: rgba(255, 255, 255, 0.08);
         }
         #search-results {
             position: absolute;
-            top: 100%;
+            top: calc(100% + 0.5rem);
             left: 0;
             right: 0;
-            background: var(--card-bg);
-            border: 1px solid var(--border-color);
-            border-radius: 0 0 0.5rem 0.5rem;
+            background: var(--glass-bg);
+            backdrop-filter: blur(16px);
+            border: 1px solid var(--glass-border);
+            border-radius: 1rem;
             z-index: 1000;
-            max-height: 200px;
+            max-height: 300px;
             overflow-y: auto;
             display: none;
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5);
         }
         .search-item {
-            padding: 0.5rem 1rem;
+            padding: 0.75rem 1rem;
             cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            transition: background 0.2s;
         }
         .search-item:hover {
-            background: var(--accent-color);
-            color: white;
+            background: rgba(255, 255, 255, 0.1);
         }
+        .search-item img {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            background: #334155;
+        }
+        .search-item .info {
+            display: flex;
+            flex-direction: column;
+        }
+        .search-item .name { font-weight: 500; font-size: 0.875rem; }
+        .search-item .username { font-size: 0.75rem; color: var(--text-secondary); }
+
         main {
             display: flex;
             flex: 1;
             overflow: hidden;
+            position: relative;
         }
         #graph-container {
             flex: 1;
-            background: var(--bg-color);
+            background: transparent;
         }
         #sidebar {
-            width: 350px;
-            background: var(--card-bg);
-            border-left: 1px solid var(--border-color);
+            width: 380px;
+            background: var(--glass-bg);
+            backdrop-filter: blur(16px);
+            border-left: 1px solid var(--glass-border);
             padding: 1.5rem;
             overflow-y: auto;
+            z-index: 50;
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
         }
-        .stats-card {
-            background: var(--bg-color);
-            padding: 1rem;
-            border-radius: 0.75rem;
-            margin-bottom: 1.5rem;
-            border: 1px solid var(--border-color);
+        .card {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid var(--glass-border);
+            border-radius: 1.25rem;
+            padding: 1.25rem;
+        }
+        .card h4 {
+            margin: 0 0 1rem 0;
+            font-size: 0.875rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-secondary);
         }
         .stats-grid {
             display: grid;
             grid-template-columns: 1fr 1fr;
             gap: 1rem;
         }
+        .stat-item {
+            display: flex;
+            flex-direction: column;
+            gap: 0.25rem;
+        }
         .stat-item .label {
-            font-size: 0.75rem;
-            color: #94a3b8;
+            font-size: 0.7rem;
+            color: var(--text-secondary);
         }
         .stat-item .value {
-            font-size: 1.25rem;
-            font-weight: bold;
+            font-size: 1.125rem;
+            font-weight: 600;
             color: var(--accent-color);
+        }
+        .user-profile {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            margin-bottom: 1rem;
+        }
+        .user-profile img {
+            width: 64px;
+            height: 64px;
+            border-radius: 1.25rem;
+            background: #334155;
+            object-fit: cover;
+            border: 2px solid var(--accent-color);
+        }
+        .user-profile .names h3 {
+            margin: 0;
+            font-size: 1.125rem;
+            font-weight: 600;
+        }
+        .user-profile .names p {
+            margin: 0;
+            font-size: 0.875rem;
+            color: var(--text-secondary);
         }
         table {
             width: 100%;
             border-collapse: collapse;
-            font-size: 0.875rem;
         }
-        th, td {
+        th {
             text-align: left;
             padding: 0.5rem;
-            border-bottom: 1px solid var(--border-color);
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            font-weight: 500;
         }
-        th { color: #94a3b8; }
-        .cluster-dot {
-            display: inline-block;
-            width: 10px;
-            height: 10px;
-            border-radius: 50%;
-            margin-right: 5px;
+        td {
+            padding: 0.75rem 0.5rem;
+            font-size: 0.875rem;
+            border-top: 1px solid var(--glass-border);
+        }
+        .rank { font-weight: 600; color: var(--text-secondary); width: 30px; }
+        .reach-val { font-weight: 600; text-align: right; color: var(--accent-color); }
+        
+        .controls {
+            position: absolute;
+            bottom: 2rem;
+            left: 2rem;
+            display: flex;
+            gap: 0.75rem;
+            z-index: 100;
+        }
+        .btn {
+            background: var(--glass-bg);
+            backdrop-filter: blur(12px);
+            border: 1px solid var(--glass-border);
+            padding: 0.6rem 1.25rem;
+            border-radius: 9999px;
+            color: var(--text-primary);
+            font-size: 0.875rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .btn:hover {
+            background: rgba(255, 255, 255, 0.1);
+            border-color: var(--accent-color);
+            transform: translateY(-2px);
+        }
+        .btn.active {
+            background: var(--accent-color);
+            color: #000;
+            border-color: var(--accent-color);
+        }
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 3px;
         }
     </style>
 </head>
 <body>
     <header>
-        <div style="font-size: 1.5rem; font-weight: bold;">Telegram Gift Graph</div>
+        <div class="logo">GIFT GRAPH</div>
         <div class="search-container">
-            <input type="text" id="search" placeholder="Поиск пользователя..." autocomplete="off">
+            <input type="text" id="search" placeholder="Поиск по имени или @username..." autocomplete="off">
             <div id="search-results"></div>
         </div>
     </header>
     <main>
         <div id="graph-container"></div>
+        <div class="controls">
+            <button class="btn active" id="btn-local" onclick="switchMode('local')">
+                <span>📍</span> Локальный
+            </button>
+            <button class="btn" id="btn-global" onclick="switchMode('global')">
+                <span>🌐</span> Общий граф
+            </button>
+        </div>
         <aside id="sidebar">
-            <div id="user-info">
-                <h3>Выберите пользователя</h3>
-                <p>Кликните по узлу или используйте поиск</p>
-            </div>
-            <div class="stats-card" id="user-stats" style="display: none;">
-                <h4>Статистика</h4>
-                <div class="stats-grid">
-                    <div class="stat-item">
-                        <div class="label">Получено</div>
-                        <div class="value" id="stat-incoming">0</div>
+            <div id="user-info-panel" style="display: none;">
+                <div class="user-profile">
+                    <img id="user-photo" src="" alt="">
+                    <div class="names">
+                        <h3 id="user-name">Имя</h3>
+                        <p id="user-handle">@username</p>
                     </div>
-                    <div class="stat-item">
-                        <div class="label">Отправлено</div>
-                        <div class="value" id="stat-outgoing">0</div>
-                    </div>
-                    <div class="stat-item">
-                        <div class="label">Соседей</div>
-                        <div class="value" id="stat-neighbors">0</div>
-                    </div>
-                    <div class="stat-item">
-                        <div class="label">Охват (5 ш.)</div>
-                        <div class="value" id="stat-reach">0</div>
+                </div>
+                <div class="card">
+                    <h4>Статистика узла</h4>
+                    <div class="stats-grid">
+                        <div class="stat-item">
+                            <div class="label">Получено</div>
+                            <div class="value" id="stat-incoming">0</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="label">Отправлено</div>
+                            <div class="value" id="stat-outgoing">0</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="label">Соседей</div>
+                            <div class="value" id="stat-neighbors">0</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="label">Охват (5 ш.)</div>
+                            <div class="value" id="stat-reach">0</div>
+                        </div>
                     </div>
                 </div>
             </div>
-            <div class="stats-card">
-                <h4>Статистика БД</h4>
+            
+            <div id="placeholder-info">
+                <h3>Анализ связей</h3>
+                <p style="color: var(--text-secondary); font-size: 0.875rem;">Выберите пользователя на графе или воспользуйтесь поиском, чтобы увидеть детальную статистику подарков.</p>
+            </div>
+
+            <div class="card">
+                <h4>База данных</h4>
                 <div class="stats-grid">
                     <div class="stat-item">
-                        <div class="label">Пользователей</div>
+                        <div class="label">Узлов</div>
                         <div class="value" id="total-users">0</div>
                     </div>
                     <div class="stat-item">
-                        <div class="label">Подарков (связей)</div>
+                        <div class="label">Связей</div>
                         <div class="value" id="total-edges">0</div>
                     </div>
                 </div>
             </div>
-            <div class="stats-card">
-                <h4>Топ охвата (5 шагов)</h4>
-                <table id="top-reach-table">
-                    <thead>
-                        <tr>
-                            <th>#</th>
-                            <th>Пользователь</th>
-                            <th>Охват</th>
-                        </tr>
-                    </thead>
-                    <tbody></tbody>
-                </table>
+
+            <div class="card" style="flex: 1; overflow: hidden; display: flex; flex-direction: column;">
+                <h4>Топ охвата</h4>
+                <div style="overflow-y: auto; flex: 1;">
+                    <table id="top-reach-table">
+                        <thead>
+                            <tr>
+                                <th class="rank">#</th>
+                                <th>Пользователь</th>
+                                <th style="text-align: right;">Охват</th>
+                            </tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
             </div>
         </aside>
     </main>
 
     <script>
         let network = null;
-        let currentUsername = null;
-        const colorPalette = ['#f87171', '#fb923c', '#fbbf24', '#facc15', '#a3e635', '#4ade80', '#34d399', '#2dd4bf', '#22d3ee', '#38bdf8', '#818cf8', '#a78bfa', '#c084fc', '#e879f9', '#f472b6', '#fb7185'];
+        let currentMode = 'local'; // 'local' or 'global'
+        const colorPalette = ['#38bdf8', '#818cf8', '#a78bfa', '#fb7185', '#fb923c', '#facc15', '#4ade80'];
 
         const searchInput = document.getElementById('search');
         const searchResults = document.getElementById('search-results');
@@ -215,12 +366,19 @@
                 searchResults.style.display = 'none';
                 return;
             }
-            users.forEach(u => {
+            users.forEach(user => {
                 const div = document.createElement('div');
                 div.className = 'search-item';
-                div.textContent = u.username ? `@${u.username}` : u.first_name || `id${u.id}`;
+                const photo = user.has_photo ? `/avatars/${user.id}.jpg` : 'https://ui-avatars.com/api/?name=' + encodeURIComponent(user.first_name || user.username);
+                div.innerHTML = `
+                    <img src="${photo}" onerror="this.src='https://ui-avatars.com/api/?name=?'">
+                    <div class="info">
+                        <div class="name">${user.first_name || 'Без имени'}</div>
+                        <div class="username">${user.username ? '@' + user.username : 'ID: ' + user.id}</div>
+                    </div>
+                `;
                 div.onclick = () => {
-                    loadGraph(u.username || u.id);
+                    loadGraph(user.id);
                     searchResults.style.display = 'none';
                     searchInput.value = '';
                 };
@@ -229,80 +387,102 @@
             searchResults.style.display = 'block';
         }
 
-        async function loadGraph(identifier) {
-            currentUsername = identifier;
-            const res = await fetch(`/api/users/${identifier}/graph`);
-            if (!res.ok) return;
-            const data = await res.json();
-            renderGraph(data);
-            updateStats(data.stats, data.nodes.find(n => n.id === data.stats.user_id));
+        async function switchMode(mode) {
+            currentMode = mode;
+            document.getElementById('btn-local').classList.toggle('active', mode === 'local');
+            document.getElementById('btn-global').classList.toggle('active', mode === 'global');
+            
+            if (mode === 'global') {
+                loadGlobalGraph();
+            } else {
+                // Load some default or last local
+                const res = await fetch('/api/stats/top-reach?limit=1');
+                const data = await res.json();
+                if (data.length > 0) loadGraph(data[0].id);
+            }
         }
 
-        function renderGraph(data) {
-            const container = document.getElementById('graph-container');
+        async function loadGlobalGraph() {
+            const res = await fetch('/api/graph/global?limit=200');
+            const data = await res.json();
+            renderGraph(data.nodes, data.edges, true);
+        }
+
+        async function loadGraph(userId) {
+            const res = await fetch(`/api/users/${userId}/graph`);
+            const data = await res.json();
+            renderGraph(data.nodes, data.edges, false);
+            updateUserInfo(data.stats, data.nodes.find(n => n.id === data.stats.user_id));
+        }
+
+        function updateUserInfo(stats, user) {
+            document.getElementById('placeholder-info').style.display = 'none';
+            document.getElementById('user-info-panel').style.display = 'block';
             
-            const nodes = new vis.DataSet(data.nodes.map(n => ({
-                id: n.id,
-                label: n.label,
-                title: n.first_name || n.label,
-                color: n.cluster !== null ? colorPalette[n.cluster % colorPalette.length] : '#94a3b8',
-                font: { color: '#f1f5f9' }
-            })));
+            document.getElementById('user-name').innerText = user.first_name || 'Без имени';
+            document.getElementById('user-handle').innerText = user.username ? '@' + user.username : 'ID: ' + user.id;
+            document.getElementById('user-photo').src = user.has_photo ? `/avatars/${user.id}.jpg` : 'https://ui-avatars.com/api/?name=' + encodeURIComponent(user.first_name || user.username);
+            
+            document.getElementById('stat-incoming').innerText = stats.incoming_gifts;
+            document.getElementById('stat-outgoing').innerText = stats.outgoing_gifts;
+            document.getElementById('stat-neighbors').innerText = stats.neighbors;
+            document.getElementById('stat-reach').innerText = stats.reach_5;
+        }
 
-            const edges = new vis.DataSet(data.edges.map(e => ({
-                from: e.from,
-                to: e.to,
-                value: e.weight,
-                title: e.title,
-                width: Math.min(e.weight, 10),
-                arrows: 'to',
-                color: { color: '#334155', highlight: '#38bdf8' }
-            })));
-
-            const options = {
-                nodes: { shape: 'dot', size: 20 },
-                physics: {
-                    solver: 'forceAtlas2Based',
-                    forceAtlas2Based: {
-                        gravitationalConstant: -50,
-                        springConstant: 0.08,
-                        springLength: 100,
-                        damping: 0.4
+        function renderGraph(nodesData, edgesData, isGlobal) {
+            const nodes = new vis.DataSet(nodesData.map(node => {
+                const photo = node.has_photo ? `/avatars/${node.id}.jpg` : null;
+                return {
+                    id: node.id,
+                    label: node.label,
+                    shape: photo ? 'circularImage' : 'dot',
+                    image: photo,
+                    size: isGlobal ? 20 : 30,
+                    color: {
+                        background: colorPalette[node.cluster % colorPalette.length] || '#38bdf8',
+                        border: '#ffffff',
+                        highlight: { background: '#38bdf8', border: '#ffffff' }
                     },
-                    stabilization: { iterations: 150 }
+                    font: { color: '#f8fafc', size: 12, face: 'Inter', strokeWidth: 0 },
+                    borderWidth: 2
+                };
+            }));
+
+            const edges = new vis.DataSet(edgesData.map(edge => ({
+                from: edge.from,
+                to: edge.to,
+                value: edge.weight,
+                length: edge.length || (isGlobal ? 200 : 150),
+                color: { color: 'rgba(148, 163, 184, 0.3)', highlight: '#38bdf8' },
+                arrows: { to: { enabled: true, scaleFactor: 0.5 } },
+                title: edge.title
+            })));
+
+            const container = document.getElementById('graph-container');
+            const data = { nodes, edges };
+            const options = {
+                physics: {
+                    stabilization: true,
+                    barnesHut: {
+                        gravitationalConstant: -2000,
+                        springConstant: 0.04,
+                        springLength: isGlobal ? 200 : 150
+                    }
                 },
-                interaction: { hover: true, tooltipDelay: 200 }
+                interaction: {
+                    hover: true,
+                    tooltipDelay: 200
+                }
             };
 
             if (network) network.destroy();
-            network = new vis.Network(container, { nodes, edges }, options);
+            network = new vis.Network(container, data, options);
 
-            network.on("click", (params) => {
+            network.on("click", function (params) {
                 if (params.nodes.length > 0) {
-                    const nodeId = params.nodes[0];
-                    const node = data.nodes.find(n => n.id === nodeId);
-                    loadGraph(node.username || node.id);
+                    loadGraph(params.nodes[0]);
                 }
             });
-        }
-
-        function updateStats(stats, userInfo) {
-            const sourceMap = {
-                'start': 'Начальная точка',
-                'chat': 'Из чата',
-                'gift': 'По цепочке подарков',
-                'unknown': 'Неизвестно'
-            };
-            document.getElementById('user-info').innerHTML = `
-                <h3>${userInfo.username ? '@' + userInfo.username : userInfo.label}</h3>
-                <p>${userInfo.first_name || ''}</p>
-                <p style="font-size: 0.75rem; color: #94a3b8;">Источник: ${sourceMap[userInfo.source] || userInfo.source}</p>
-            `;
-            document.getElementById('user-stats').style.display = 'block';
-            document.getElementById('stat-incoming').textContent = stats.incoming_gifts;
-            document.getElementById('stat-outgoing').textContent = stats.outgoing_gifts;
-            document.getElementById('stat-neighbors').textContent = stats.neighbors;
-            document.getElementById('stat-reach').textContent = stats.reach_5;
         }
 
         async function updateSummary() {
@@ -319,30 +499,45 @@
             const data = await res.json();
             const tbody = document.querySelector('#top-reach-table tbody');
             tbody.innerHTML = '';
-            data.forEach((u, i) => {
+            data.forEach((item, index) => {
                 const tr = document.createElement('tr');
+                tr.style.cursor = 'pointer';
+                tr.onclick = () => loadGraph(item.id);
+                const photo = item.has_photo ? `/avatars/${item.id}.jpg` : 'https://ui-avatars.com/api/?name=' + encodeURIComponent(item.first_name || item.username);
                 tr.innerHTML = `
-                    <td>${i + 1}</td>
-                    <td style="cursor:pointer;color:var(--accent-color)" onclick="loadGraph('${u.username || u.id}')">
-                        ${u.username ? '@' + u.username : u.first_name || 'id' + u.id}
+                    <td class="rank">${index + 1}</td>
+                    <td>
+                        <div style="display: flex; align-items: center; gap: 0.5rem;">
+                            <img src="${photo}" style="width: 24px; height: 24px; border-radius: 50%; background: #334155;">
+                            <span>${item.first_name || item.username || 'ID: ' + item.id}</span>
+                        </div>
                     </td>
-                    <td>${u.reach_count}</td>
+                    <td class="reach-val">${item.reach_count}</td>
                 `;
                 tbody.appendChild(tr);
             });
         }
 
-        // Поллинг
-        setInterval(() => {
-            if (currentUsername) loadGraph(currentUsername);
-            updateTopReach();
-        }, 30000);
-
         // Инициализация
         updateSummary();
         updateTopReach();
+        
+        // Load initial graph
+        setTimeout(async () => {
+            const res = await fetch('/api/stats/top-reach?limit=1');
+            const data = await res.json();
+            if (data.length > 0) loadGraph(data[0].id);
+        }, 500);
+
         setInterval(updateSummary, 10000);
         setInterval(updateTopReach, 60000);
+        
+        // Close search results when clicking outside
+        document.addEventListener('click', (e) => {
+            if (!searchInput.contains(e.target) && !searchResults.contains(e.target)) {
+                searchResults.style.display = 'none';
+            }
+        });
     </script>
 </body>
 </html>

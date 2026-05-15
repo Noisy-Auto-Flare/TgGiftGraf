@@ -1,6 +1,7 @@
 import asyncio
 import random
 import logging
+import os
 from logging.handlers import RotatingFileHandler
 import time
 from telethon import TelegramClient, functions, types, errors
@@ -28,24 +29,41 @@ async def human_delay(min_sec=1.0, max_sec=3.0):
     """Небольшая пауза между API запросами для имитации человека."""
     await asyncio.sleep(random.uniform(float(min_sec), float(max_sec)))
 
+async def download_profile_photo(client, user_id, entity):
+    """Скачивает фото профиля пользователя, если оно есть."""
+    try:
+        path = f"static/avatars/{user_id}.jpg"
+        if os.path.exists(path):
+            return True
+            
+        await client.download_profile_photo(entity, file=path, download_big=False)
+        if os.path.exists(path):
+            return True
+    except Exception as e:
+        logger.debug(f"Не удалось скачать фото для {user_id}: {e}")
+    return False
+
 async def get_user_info(client, entity_id):
     """Получает информацию о пользователе с обработкой ошибок и паузой."""
     try:
         # Пауза перед запросом
         await human_delay(0.5, 1.5)
         entity = await client.get_entity(entity_id)
+        has_photo = await download_profile_photo(client, entity.id, entity)
         if isinstance(entity, types.User):
             return {
                 'id': entity.id,
                 'username': entity.username,
                 'first_name': (entity.first_name or "") + (" " + entity.last_name if entity.last_name else ""),
-                'is_bot': entity.bot
+                'is_bot': entity.bot,
+                'has_photo': 1 if has_photo else 0
             }
         return {
             'id': entity.id,
             'username': getattr(entity, 'username', None),
             'first_name': getattr(entity, 'title', str(entity.id)),
-            'is_bot': False
+            'is_bot': False,
+            'has_photo': 1 if has_photo else 0
         }
     except (errors.UserDeactivatedError, errors.UsernameInvalidError, errors.UserIdInvalidError):
         logger.warning(f"Пользователь {entity_id} деактивирован или невалиден.")
@@ -163,6 +181,8 @@ async def process_user(client, conn, target_user_id):
         try:
             full_entity = await client.get_entity(target_user_id)
             input_entity = await client.get_input_entity(full_entity)
+            has_photo = await download_profile_photo(client, target_user_id, full_entity)
+            cursor.execute("UPDATE users SET has_photo = ? WHERE id = ?", (1 if has_photo else 0, target_user_id))
         except (errors.UserIdInvalidError, ValueError) as e:
             logger.warning(f"Не удалось получить сущность для {target_user_id}: {e}. Удаляем из очереди.")
             cursor.execute("DELETE FROM crawl_queue WHERE user_id = ?", (target_user_id,))
@@ -279,6 +299,16 @@ async def process_user(client, conn, target_user_id):
                         u_info = await get_user_info(client, sender_id)
 
                     if u_info and not u_info['is_bot']:
+                        # Сохраняем пользователя (на случай если его нет в БД)
+                        cursor.execute('''
+                            INSERT INTO users (id, username, first_name, discovery_source, is_bot, has_photo) 
+                            VALUES (?, ?, ?, 'gift', 0, ?)
+                            ON CONFLICT(id) DO UPDATE SET 
+                                username = COALESCE(excluded.username, users.username),
+                                first_name = COALESCE(excluded.first_name, users.first_name),
+                                has_photo = COALESCE(excluded.has_photo, users.has_photo)
+                        ''', (u_info['id'], u_info['username'], u_info['first_name'], u_info.get('has_photo', 0)))
+
                         # Сохраняем связь
                         cursor.execute('''
                             INSERT INTO edges (from_user_id, to_user_id, weight, last_gift_title, last_gift_date)

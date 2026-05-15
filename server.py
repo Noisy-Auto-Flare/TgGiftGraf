@@ -20,7 +20,7 @@ async def search_users(q: str = Query(..., min_length=2)):
     cursor = conn.cursor()
     # Поиск через FTS5
     cursor.execute("""
-        SELECT id, username, first_name 
+        SELECT rowid as id, username, first_name 
         FROM users_fts 
         WHERE users_fts MATCH ? 
         LIMIT 20
@@ -76,19 +76,21 @@ async def get_user_graph(identifier: str, depth: int = 1):
     if nodes_ids:
         placeholders = ', '.join(['?'] * len(nodes_ids))
         cursor.execute(f"""
-            SELECT u.id, u.username, u.first_name, u.discovery_source, c.cluster_id
+            SELECT u.id, u.username, u.first_name, u.discovery_source, u.has_photo, c.cluster_id
             FROM users u
             LEFT JOIN user_clusters c ON u.id = c.user_id
             WHERE u.id IN ({placeholders})
         """, list(nodes_ids))
         for row in cursor.fetchall():
-            label = row['username'] if row['username'] else f"id{row['id']}"
+            label = row['first_name'] if row['first_name'] else (row['username'] if row['username'] else f"id{row['id']}")
             nodes.append({
                 "id": row['id'],
                 "label": label,
+                "username": row['username'],
                 "first_name": row['first_name'],
                 "cluster": row['cluster_id'],
-                "source": row['discovery_source']
+                "source": row['discovery_source'],
+                "has_photo": bool(row['has_photo'])
             })
 
     # Статистика пользователя
@@ -117,12 +119,67 @@ async def get_user_graph(identifier: str, depth: int = 1):
         "stats": stats
     }
 
+@app.get("/api/graph/global")
+async def get_global_graph(limit: int = 100):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    # Получаем топ-пользователей по количеству связей
+    cursor.execute("""
+        SELECT u.id, u.username, u.first_name, u.has_photo, c.cluster_id
+        FROM users u
+        LEFT JOIN user_clusters c ON u.id = c.user_id
+        WHERE u.id IN (SELECT from_user_id FROM edges UNION SELECT to_user_id FROM edges)
+        LIMIT ?
+    """, (limit,))
+    nodes_rows = cursor.fetchall()
+    
+    nodes_ids = [row['id'] for row in nodes_rows]
+    nodes = []
+    for row in nodes_rows:
+        label = row['first_name'] if row['first_name'] else (row['username'] if row['username'] else f"id{row['id']}")
+        nodes.append({
+            "id": row['id'],
+            "label": label,
+            "username": row['username'],
+            "first_name": row['first_name'],
+            "cluster": row['cluster_id'],
+            "has_photo": bool(row['has_photo'])
+        })
+    
+    # Получаем рёбра между этими пользователями
+    if nodes_ids:
+        placeholders = ', '.join(['?'] * len(nodes_ids))
+        cursor.execute(f"""
+            SELECT from_user_id, to_user_id, weight, last_gift_title
+            FROM edges
+            WHERE from_user_id IN ({placeholders}) AND to_user_id IN ({placeholders})
+        """, nodes_ids + nodes_ids)
+        edges_rows = cursor.fetchall()
+        
+        edges = []
+        for row in edges_rows:
+            # Длина ребра обратно пропорциональна весу (чем больше подарков, тем ближе)
+            length = max(50, 300 - row['weight'] * 20)
+            edges.append({
+                "from": row['from_user_id'],
+                "to": row['to_user_id'],
+                "weight": row['weight'],
+                "length": length,
+                "title": f"Подарков: {row['weight']}"
+            })
+    else:
+        edges = []
+
+    conn.close()
+    return {"nodes": nodes, "edges": edges}
+
 @app.get("/api/stats/top-reach")
 async def get_top_reach(limit: int = 10):
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT u.id, u.username, u.first_name, r.reach_count
+        SELECT u.id, u.username, u.first_name, u.has_photo, r.reach_count
         FROM user_reach r
         JOIN users u ON r.user_id = u.id
         ORDER BY r.reach_count DESC
