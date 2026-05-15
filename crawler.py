@@ -243,7 +243,7 @@ async def process_user(client, conn, target_user_id):
                 for u in gifts_res.users:
                     if isinstance(u, types.User):
                         user_map[u.id] = u
-                        # Сохраняем/обновляем инфо о пользователе
+                        # Сохраняем/обновляем инфо о пользователе (НЕ сбрасываем has_photo)
                         cursor.execute('''
                             INSERT INTO users (id, username, first_name, discovery_source, is_bot) 
                             VALUES (?, ?, ?, 'gift_list', 0)

@@ -591,9 +591,17 @@
                 to: edge.to,
                 value: edge.weight,
                 length: edge.length || (isGlobal ? 200 : 150),
-                color: { color: 'rgba(148, 163, 184, 0.3)', highlight: '#38bdf8' },
-                arrows: { to: { enabled: true, scaleFactor: 0.5 } },
-                title: edge.title
+                color: { color: 'rgba(148, 163, 184, 0.5)', highlight: '#38bdf8' },
+                    arrows: { to: { enabled: true, scaleFactor: 0.5 } },
+                    label: edge.label || '',
+                    font: { 
+                        color: '#38bdf8', 
+                        size: 10, 
+                        align: 'top', 
+                        strokeWidth: 2, 
+                        strokeColor: '#0b0e14' 
+                    },
+                    title: edge.title
             })));
 
             const container = document.getElementById('graph-container');

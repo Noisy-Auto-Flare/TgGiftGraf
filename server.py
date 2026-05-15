@@ -70,6 +70,7 @@ async def get_user_graph(identifier: str, depth: int = 1):
             "from": row['from_user_id'],
             "to": row['to_user_id'],
             "weight": row['weight'],
+            "label": str(row['weight']), # Число подарков над стрелкой
             "title": f"Подарков: {row['weight']}\nПоследний: {row['last_gift_title']}"
         })
     
@@ -85,6 +86,8 @@ async def get_user_graph(identifier: str, depth: int = 1):
         """, list(nodes_ids))
         for row in cursor.fetchall():
             label = row['first_name'] if row['first_name'] else (row['username'] if row['username'] else f"id{row['id']}")
+            if len(label) > 16:
+                label = label[:13] + "..."
             nodes.append({
                 "id": row['id'],
                 "label": label,
@@ -139,37 +142,42 @@ async def get_global_graph(limit: int = 100):
     nodes_ids = [row['id'] for row in nodes_rows]
     nodes = []
     for row in nodes_rows:
-        label = row['first_name'] if row['first_name'] else (row['username'] if row['username'] else f"id{row['id']}")
+        display_name = row['first_name'] if row['first_name'] else (row['username'] if row['username'] else f"id{row['id']}")
+        if len(display_name) > 16:
+            display_name = display_name[:13] + "..."
+            
         nodes.append({
             "id": row['id'],
-            "label": label,
+            "label": display_name,
             "username": row['username'],
             "first_name": row['first_name'],
             "cluster": row['cluster_id'],
             "has_photo": bool(row['has_photo'])
         })
     
-    # Получаем рёбра между этими пользователями
+    # Получаем рёбра между всеми пользователями, которые входят в список узлов
     if nodes_ids:
         placeholders = ', '.join(['?'] * len(nodes_ids))
         cursor.execute(f"""
             SELECT from_user_id, to_user_id, weight, last_gift_title
             FROM edges
-            WHERE from_user_id IN ({placeholders}) AND to_user_id IN ({placeholders})
+            WHERE from_user_id IN ({placeholders}) OR to_user_id IN ({placeholders})
         """, nodes_ids + nodes_ids)
         edges_rows = cursor.fetchall()
         
         edges = []
         for row in edges_rows:
-            # Длина ребра обратно пропорциональна весу (чем больше подарков, тем ближе)
-            length = max(50, 300 - row['weight'] * 20)
-            edges.append({
-                "from": row['from_user_id'],
-                "to": row['to_user_id'],
-                "weight": row['weight'],
-                "length": length,
-                "title": f"Подарков: {row['weight']}"
-            })
+            # Добавляем ребро только если оба узла есть в нашем списке отображаемых узлов
+            if row['from_user_id'] in nodes_ids and row['to_user_id'] in nodes_ids:
+                length = max(50, 300 - row['weight'] * 20)
+                edges.append({
+                    "from": row['from_user_id'],
+                    "to": row['to_user_id'],
+                    "weight": row['weight'],
+                    "label": str(row['weight']), # Число подарков над стрелкой
+                    "length": length,
+                    "title": f"Подарков: {row['weight']}"
+                })
     else:
         edges = []
 
