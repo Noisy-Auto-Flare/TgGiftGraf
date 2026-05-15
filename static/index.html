@@ -157,6 +157,19 @@
                 </div>
             </div>
             <div class="stats-card">
+                <h4>Статистика БД</h4>
+                <div class="stats-grid">
+                    <div class="stat-item">
+                        <div class="label">Пользователей</div>
+                        <div class="value" id="total-users">0</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="label">Подарков (связей)</div>
+                        <div class="value" id="total-edges">0</div>
+                    </div>
+                </div>
+            </div>
+            <div class="stats-card">
                 <h4>Топ охвата (5 шагов)</h4>
                 <table id="top-reach-table">
                     <thead>
@@ -292,6 +305,15 @@
             document.getElementById('stat-reach').textContent = stats.reach_5;
         }
 
+        async function updateSummary() {
+            try {
+                const res = await fetch('/api/stats/summary');
+                const data = await res.json();
+                document.getElementById('total-users').innerText = data.total_users;
+                document.getElementById('total-edges').innerText = data.total_edges;
+            } catch (e) { console.error(e); }
+        }
+
         async function updateTopReach() {
             const res = await fetch('/api/stats/top-reach?limit=10');
             const data = await res.json();
@@ -317,13 +339,10 @@
         }, 30000);
 
         // Инициализация
+        updateSummary();
         updateTopReach();
-        // Можно загрузить первого из топа при старте
-        setTimeout(async () => {
-            const res = await fetch('/api/stats/top-reach?limit=1');
-            const data = await res.json();
-            if (data.length > 0) loadGraph(data[0].username || data[0].id);
-        }, 1000);
+        setInterval(updateSummary, 10000);
+        setInterval(updateTopReach, 60000);
     </script>
 </body>
 </html>

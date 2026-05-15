@@ -146,11 +146,20 @@ async def get_summary():
     cursor.execute("SELECT COUNT(DISTINCT cluster_id) as count FROM user_clusters")
     clusters_count = cursor.fetchone()['count']
     
+    # Добавляем информацию о очереди и последних сканированиях для отладки
+    cursor.execute("SELECT COUNT(*) as count FROM crawl_queue")
+    queue_count = cursor.fetchone()['count']
+    
+    cursor.execute("SELECT id, username, first_name, last_scanned FROM users WHERE last_scanned > 0 ORDER BY last_scanned DESC LIMIT 5")
+    last_scanned = [dict(row) for row in cursor.fetchall()]
+    
     conn.close()
     return {
         "total_users": users_count,
         "total_edges": edges_count,
-        "total_clusters": clusters_count
+        "total_clusters": clusters_count,
+        "queue_count": queue_count,
+        "last_scanned": last_scanned
     }
 
 # Раздача статики (если не через Caddy)

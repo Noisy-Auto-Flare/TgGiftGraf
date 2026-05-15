@@ -59,42 +59,43 @@ async def get_user_info(client, entity_id):
 
 async def add_to_queue(conn, user_id, priority=0, source='unknown'):
     """Добавляет пользователя в очередь с проверкой лимита."""
-    cursor = conn.cursor()
-    
-    # 1. Проверка лимита очереди
-    cursor.execute("SELECT COUNT(*) as count FROM crawl_queue")
-    current_count = cursor.fetchone()['count']
-    if current_count >= MAX_CRAWL_QUEUE_SIZE:
-        # Если очередь полна, можем попробовать вытеснить записи с низким приоритетом
-        # Но для простоты и стабильности — просто не добавляем.
-        return
-
-    # 2. Проверка, есть ли уже в очереди
-    cursor.execute("SELECT 1 FROM crawl_queue WHERE user_id = ?", (user_id,))
-    if cursor.fetchone():
-        return
-
-    # 3. Проверка когда сканировали последний раз
-    cursor.execute("SELECT last_scanned, is_bot FROM users WHERE id = ?", (user_id,))
-    user_row = cursor.fetchone()
-    
-    # Не добавляем ботов
-    if user_row and user_row['is_bot']:
-        return
-
-    now = int(time.time())
-    if not user_row or (now - user_row['last_scanned']) > (RESCAN_THRESHOLD_DAYS * 86400):
-        cursor.execute('''
-            INSERT OR IGNORE INTO crawl_queue (user_id, priority) 
-            VALUES (?, ?)
-        ''', (user_id, priority))
+    try:
+        cursor = conn.cursor()
         
-        if not user_row:
+        # 1. Проверка лимита очереди
+        cursor.execute("SELECT COUNT(*) as count FROM crawl_queue")
+        current_count = cursor.fetchone()['count']
+        if current_count >= MAX_CRAWL_QUEUE_SIZE:
+            return
+
+        # 2. Проверка, есть ли уже в очереди
+        cursor.execute("SELECT 1 FROM crawl_queue WHERE user_id = ?", (user_id,))
+        if cursor.fetchone():
+            return
+
+        # 3. Проверка когда сканировали последний раз
+        cursor.execute("SELECT last_scanned, is_bot FROM users WHERE id = ?", (user_id,))
+        user_row = cursor.fetchone()
+        
+        # Не добавляем ботов
+        if user_row and user_row['is_bot']:
+            return
+
+        now = int(time.time())
+        if not user_row or (now - user_row['last_scanned']) > (RESCAN_THRESHOLD_DAYS * 86400):
             cursor.execute('''
-                INSERT OR IGNORE INTO users (id, discovery_source) 
+                INSERT OR IGNORE INTO crawl_queue (user_id, priority) 
                 VALUES (?, ?)
-            ''', (user_id, source))
-        conn.commit()
+            ''', (user_id, priority))
+            
+            if not user_row:
+                cursor.execute('''
+                    INSERT OR IGNORE INTO users (id, discovery_source) 
+                    VALUES (?, ?)
+                ''', (user_id, source))
+            conn.commit()
+    except Exception as e:
+        logger.error(f"Ошибка при добавлении в очередь {user_id}: {e}")
 
 async def scan_chats(client, conn):
     """Сканирует целевые чаты с паузами. Если нет прав админа, собирает из последних сообщений."""
@@ -142,6 +143,7 @@ async def scan_chats(client, conn):
             await human_delay(3, 7) # Пауза между чатами
         except Exception as e:
             logger.error(f"Ошибка при сканировании чата {chat_username}: {e}")
+    conn.commit()
 
 async def process_user(client, conn, target_user_id):
     """Обрабатывает одного пользователя из очереди."""
@@ -168,6 +170,7 @@ async def process_user(client, conn, target_user_id):
             return
 
         # Проверка количества подарков через FullUser (опционально, для отладки)
+        star_gifts_count = 0
         try:
             full_user = await client(functions.users.GetFullUserRequest(id=input_entity))
             star_gifts_count = getattr(full_user.full_user, 'star_gifts_count', 0)
@@ -182,45 +185,38 @@ async def process_user(client, conn, target_user_id):
         logger.info(f"Запрос подарков для {target_user_id}...")
         await human_delay(0.5, 1.0)
         
-        # Динамически ищем метод, чтобы избежать ошибок при разных версиях Telethon
+        # Динамически ищем методы
         GetUserGiftsRequest = getattr(functions.payments, 'GetUserGiftsRequest', None)
         GetSavedStarGiftsRequest = getattr(functions.payments, 'GetSavedStarGiftsRequest', None)
         
         gifts_res = None
-        # Сначала пробуем GetSavedStarGiftsRequest (наиболее актуальный для Star Gifts)
+        # 1. Пробуем GetSavedStarGiftsRequest (Star Gifts)
         if GetSavedStarGiftsRequest:
             try:
-                # Пробуем получить ВСЕ подарки (включая не сохраненные в профиле, если это возможно)
-                gifts_res = await client(GetSavedStarGiftsRequest(
-                    peer=input_entity,
-                    offset='',
-                    limit=100
-                ))
+                gifts_res = await client(GetSavedStarGiftsRequest(peer=input_entity, offset='', limit=100))
+                if gifts_res and getattr(gifts_res, 'gifts', []):
+                    logger.info(f"Найдено {len(gifts_res.gifts)} Star Gifts для {target_user_id}")
             except Exception as e:
-                logger.debug(f"GetSavedStarGiftsRequest failed for {target_user_id}: {e}")
+                logger.debug(f"GetSavedStarGiftsRequest failed: {e}")
 
-        # Если не сработало или пусто, и есть старый метод (для очень старых подарков)
+        # 2. Если ничего не нашли, пробуем GetUserGiftsRequest (Старые подарки)
         if (not gifts_res or not getattr(gifts_res, 'gifts', [])) and GetUserGiftsRequest:
             try:
-                gifts_res = await client(GetUserGiftsRequest(
-                    user_id=input_entity,
-                    offset='',
-                    limit=100
-                ))
+                gifts_res = await client(GetUserGiftsRequest(user_id=input_entity, offset='', limit=100))
+                if gifts_res and getattr(gifts_res, 'gifts', []):
+                    logger.info(f"Найдено {len(gifts_res.gifts)} старых подарков для {target_user_id}")
             except Exception as e:
-                logger.debug(f"GetUserGiftsRequest failed for {target_user_id}: {e}")
+                logger.debug(f"GetUserGiftsRequest failed: {e}")
 
-        if not gifts_res:
-            logger.warning(f"Метод получения подарков не вернул результат для {target_user_id}. Пропускаем без пометки о сканировании.")
+        if not gifts_res or not hasattr(gifts_res, 'gifts'):
+            logger.info(f"Подарки для {target_user_id} не найдены ни одним из методов.")
+            cursor.execute("UPDATE users SET last_scanned = ? WHERE id = ?", (int(time.time()), target_user_id))
             cursor.execute("DELETE FROM crawl_queue WHERE user_id = ?", (target_user_id,))
             conn.commit()
             return
 
-        gift_count = 0
-        if hasattr(gifts_res, 'gifts'):
-            gift_count = len(gifts_res.gifts)
-            logger.info(f"Получен ответ для {target_user_id}: {gift_count} подарков.")
-            
+        gift_count = len(gifts_res.gifts)
+        if gift_count > 0:
             # Сохраняем пользователей, пришедших в ответе (это отправители подарков)
             user_map = {}
             if hasattr(gifts_res, 'users'):
@@ -296,7 +292,7 @@ async def process_user(client, conn, target_user_id):
                         # Добавляем отправителя в очередь на сканирование
                         await add_to_queue(conn, u_info['id'], priority=0, source='gift')
         else:
-            logger.info(f"У пользователя {target_user_id} нет публичных подарков или формат ответа не распознан.")
+            logger.info(f"У пользователя {target_user_id} 0 подарков в ответе.")
 
         # Помечаем как просканированный
         cursor.execute("UPDATE users SET last_scanned = ? WHERE id = ?", (int(time.time()), target_user_id))
@@ -349,6 +345,7 @@ async def init_contacts(client, conn):
                             is_bot = excluded.is_bot
                     ''', (user.id, user.username, (user.first_name or "") + (" " + user.last_name if user.last_name else ""), 0))
                     await add_to_queue(conn, user.id, priority=1, source='contact')
+            conn.commit()
             logger.info(f"Добавлено {len(contacts.users)} контактов в очередь.")
     except Exception as e:
         logger.error(f"Ошибка при получении контактов: {e}")
@@ -412,6 +409,7 @@ async def scan_dialogs(client, conn):
                 count += 1
             
             if count > 500: break # Лимит за один проход
+        conn.commit()
         logger.info(f"Авто-сканирование диалогов завершено. Найдено {count} потенциальных целей.")
     except Exception as e:
         logger.error(f"Ошибка при сканировании диалогов: {e}")
