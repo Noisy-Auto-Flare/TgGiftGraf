@@ -576,16 +576,13 @@
                     id: node.id,
                     label: node.label,
                     shape: photo ? 'circularImage' : 'dot',
-                    image: photo,
-                    brokenImage: 'https://ui-avatars.com/api/?name=' + encodeURIComponent(node.label),
+                    image: photo || '',
                     size: isGlobal ? 20 : 30,
                     color: {
                         background: colorPalette[node.cluster % colorPalette.length] || '#38bdf8',
-                        border: '#ffffff',
-                        highlight: { background: '#38bdf8', border: '#ffffff' }
+                        border: '#ffffff'
                     },
-                    font: { color: '#f8fafc', size: 12, face: 'Inter', strokeWidth: 4, strokeColor: '#0b0e14' },
-                    borderWidth: 2
+                    font: { color: '#f8fafc', size: 12, face: 'Inter' }
                 };
             }));
 
@@ -604,67 +601,51 @@
             const options = {
                 physics: {
                     enabled: true,
-                    stabilization: {
-                        enabled: true,
-                        iterations: 1000,
-                        updateInterval: 25
-                    },
                     barnesHut: {
                         gravitationalConstant: -2000,
                         centralGravity: 0.3,
                         springLength: isGlobal ? 200 : 150,
-                        springConstant: 0.04,
-                        damping: 0.09,
-                        avoidOverlap: 0.1
-                    }
-                },
-                nodes: {
-                    font: {
-                        strokeWidth: 4,
-                        strokeColor: '#0b0e14'
-                    }
-                },
-                edges: {
-                    smooth: {
-                        type: 'continuous',
-                        forceDirection: 'none'
-                    }
+                        springConstant: 0.04
+                    },
+                    stabilization: { iterations: 100 }
                 },
                 interaction: {
                     hover: true,
-                    tooltipDelay: 200,
-                    hideEdgesOnDrag: false,
-                    hideNodesOnDrag: false
+                    tooltipDelay: 200
                 }
             };
 
-            if (network) network.destroy();
+            if (network) {
+                network.destroy();
+                network = null;
+            }
+            
             try {
+                const container = document.getElementById('graph-container');
                 network = new vis.Network(container, data, options);
-                logDebug("Объект Network создан");
+                logDebug("Объект Network успешно создан");
+                
+                network.once("afterDrawing", function() {
+                    network.fit();
+                    logDebug("Авто-масштаб выполнен");
+                });
+
+                network.once("stabilizationIterationsDone", function() {
+                    hideLoading();
+                });
+
+                network.on("click", function (params) {
+                    if (params.nodes.length > 0) {
+                        loadGraph(params.nodes[0]);
+                    }
+                });
             } catch (e) {
                 logDebug(`Ошибка создания Network: ${e.message}`, true);
-            }
-
-            // Force fit and redraw
-            network.once("afterDrawing", function() {
-                network.fit();
-                logDebug("Авто-масштаб выполнен");
-            });
-
-            // Hide loading overlay after stabilization or 3 seconds max
-            network.once("stabilizationIterationsDone", function() {
                 hideLoading();
-            });
+            }
             
-            // Fallback for small graphs where stabilization is instant
+            // Запасной вариант скрытия загрузки
             setTimeout(hideLoading, 1500);
-
-            network.on("click", function (params) {
-                if (params.nodes.length > 0) {
-                    loadGraph(params.nodes[0]);
-                }
-            });
         }
 
         async function updateSummary() {
