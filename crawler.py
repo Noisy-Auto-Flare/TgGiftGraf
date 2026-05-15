@@ -180,7 +180,7 @@ async def process_user(client, conn, target_user_id):
 
         # Нативный запрос подарков
         logger.info(f"Запрос подарков для {target_user_id}...")
-        await human_delay(1, 2)
+        await human_delay(0.5, 1.0)
         
         # Динамически ищем метод, чтобы избежать ошибок при разных версиях Telethon
         GetUserGiftsRequest = getattr(functions.payments, 'GetUserGiftsRequest', None)
@@ -190,17 +190,17 @@ async def process_user(client, conn, target_user_id):
         # Сначала пробуем GetSavedStarGiftsRequest (наиболее актуальный для Star Gifts)
         if GetSavedStarGiftsRequest:
             try:
-                # Пробуем без лишних параметров
+                # Пробуем получить ВСЕ подарки (включая не сохраненные в профиле, если это возможно)
                 gifts_res = await client(GetSavedStarGiftsRequest(
                     peer=input_entity,
                     offset='',
                     limit=100
                 ))
             except Exception as e:
-                logger.debug(f"GetSavedStarGiftsRequest failed: {e}")
+                logger.debug(f"GetSavedStarGiftsRequest failed for {target_user_id}: {e}")
 
-        # Если не сработало, пробуем старый GetUserGiftsRequest (если он есть)
-        if not gifts_res and GetUserGiftsRequest:
+        # Если не сработало или пусто, и есть старый метод (для очень старых подарков)
+        if (not gifts_res or not getattr(gifts_res, 'gifts', [])) and GetUserGiftsRequest:
             try:
                 gifts_res = await client(GetUserGiftsRequest(
                     user_id=input_entity,
@@ -208,20 +208,18 @@ async def process_user(client, conn, target_user_id):
                     limit=100
                 ))
             except Exception as e:
-                logger.debug(f"GetUserGiftsRequest failed: {e}")
+                logger.debug(f"GetUserGiftsRequest failed for {target_user_id}: {e}")
 
         if not gifts_res:
-            logger.warning(f"Метод получения подарков не вернул результат для {target_user_id}")
-            # Помечаем пользователя, чтобы не зацикливаться
-            cursor.execute("UPDATE users SET last_scanned = ? WHERE id = ?", (int(time.time()), target_user_id))
+            logger.warning(f"Метод получения подарков не вернул результат для {target_user_id}. Пропускаем без пометки о сканировании.")
             cursor.execute("DELETE FROM crawl_queue WHERE user_id = ?", (target_user_id,))
             conn.commit()
             return
 
         gift_count = 0
-        if hasattr(gifts_res, 'gifts') and gifts_res.gifts:
+        if hasattr(gifts_res, 'gifts'):
             gift_count = len(gifts_res.gifts)
-            logger.info(f"Успешно получено {gift_count} подарков для {target_user_id}")
+            logger.info(f"Получен ответ для {target_user_id}: {gift_count} подарков.")
             
             # Сохраняем пользователей, пришедших в ответе (это отправители подарков)
             user_map = {}
@@ -229,17 +227,18 @@ async def process_user(client, conn, target_user_id):
                 for u in gifts_res.users:
                     if isinstance(u, types.User):
                         user_map[u.id] = u
-                        if not u.bot:
-                            cursor.execute('''
-                                INSERT INTO users (id, username, first_name, discovery_source, is_bot) 
-                                VALUES (?, ?, ?, 'gift_list', 0)
-                                ON CONFLICT(id) DO UPDATE SET 
-                                    username = COALESCE(excluded.username, users.username),
-                                    first_name = COALESCE(excluded.first_name, users.first_name)
-                            ''', (u.id, u.username, (u.first_name or "") + (" " + u.last_name if u.last_name else "")))
+                        # Сохраняем/обновляем инфо о пользователе
+                        cursor.execute('''
+                            INSERT INTO users (id, username, first_name, discovery_source, is_bot) 
+                            VALUES (?, ?, ?, 'gift_list', 0)
+                            ON CONFLICT(id) DO UPDATE SET 
+                                username = COALESCE(excluded.username, users.username),
+                                first_name = COALESCE(excluded.first_name, users.first_name)
+                        ''', (u.id, u.username, (u.first_name or "") + (" " + u.last_name if u.last_name else "")))
 
             for gift_attr in gifts_res.gifts:
                 from_id = getattr(gift_attr, 'from_id', None)
+                name_hidden = getattr(gift_attr, 'name_hidden', False)
                 
                 # Конвертируем дату
                 gift_date_obj = getattr(gift_attr, 'date', 0)
@@ -258,12 +257,15 @@ async def process_user(client, conn, target_user_id):
                     if hasattr(g_obj, 'sticker') and hasattr(g_obj.sticker, 'alt'):
                         gift_title = f"Gift {g_obj.sticker.alt}"
 
-                # Если from_id - это PeerUser, извлекаем ID
+                # Если отправитель скрыт, но мы можем его найти в message (иногда там есть упоминание)
                 sender_id = None
                 if isinstance(from_id, types.PeerUser):
                     sender_id = from_id.user_id
                 elif isinstance(from_id, int):
                     sender_id = from_id
+                
+                if name_hidden:
+                    logger.debug(f"У подарка {gift_title} для {target_user_id} отправитель скрыт.")
 
                 if sender_id:
                     # Проверяем, есть ли отправитель в нашем мапе из ответа
@@ -294,7 +296,7 @@ async def process_user(client, conn, target_user_id):
                         # Добавляем отправителя в очередь на сканирование
                         await add_to_queue(conn, u_info['id'], priority=0, source='gift')
         else:
-            logger.info(f"У пользователя {target_user_id} не найдено публичных подарков (список пуст).")
+            logger.info(f"У пользователя {target_user_id} нет публичных подарков или формат ответа не распознан.")
 
         # Помечаем как просканированный
         cursor.execute("UPDATE users SET last_scanned = ? WHERE id = ?", (int(time.time()), target_user_id))
@@ -422,6 +424,12 @@ async def crawl():
     async with TelegramClient(SESSION_NAME, API_ID, API_HASH) as client:
         conn = get_db_connection()
         
+        # 0. Сброс зависших сканирований (для исправления прошлых ошибок)
+        cursor = conn.cursor()
+        cursor.execute("UPDATE users SET last_scanned = 0 WHERE id NOT IN (SELECT from_user_id FROM edges) AND id NOT IN (SELECT to_user_id FROM edges)")
+        conn.commit()
+        logger.info("Сброшен статус сканирования для пользователей без найденных подарков.")
+
         # 1. Инициализация
         # Если START_USERNAMES пуст, пробуем контакты
         if not START_USERNAMES:
