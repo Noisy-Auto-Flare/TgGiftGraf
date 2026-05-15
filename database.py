@@ -3,8 +3,18 @@ import os
 from config import DB_PATH
 
 def get_db_connection():
-    conn = sqlite3.connect(DB_PATH)
+    """Создает подключение к базе данных с поддержкой конкурентного доступа."""
+    conn = sqlite3.connect('gifts.db', timeout=30.0) # Увеличиваем таймаут ожидания
     conn.row_factory = sqlite3.Row
+    
+    # Включаем режим WAL (Write-Ahead Logging)
+    # Это позволяет одновременно читать и писать в базу без блокировок
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+    except Exception as e:
+        print(f"Ошибка при включении WAL мода: {e}")
+        
     return conn
 
 def init_db():

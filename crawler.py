@@ -115,6 +115,9 @@ async def add_to_queue(conn, user_id, priority=0, source='unknown'):
     try:
         cursor = conn.cursor()
         
+        # Завершаем текущую транзакцию, если она есть, чтобы не блокировать чтение
+        conn.commit()
+        
         # 1. Проверка лимита очереди
         cursor.execute("SELECT COUNT(*) as count FROM crawl_queue")
         current_count = cursor.fetchone()['count']
@@ -239,7 +242,7 @@ async def process_user(client, conn, target_user_id):
         # Нативный запрос подарков
         logger.info(f"Запрос подарков для {target_user_id}...")
         await human_delay(0.5, 1.0)
-        
+
         # Динамически ищем методы
         GetUserGiftsRequest = getattr(functions.payments, 'GetUserGiftsRequest', None)
         GetSavedStarGiftsRequest = getattr(functions.payments, 'GetSavedStarGiftsRequest', None)
