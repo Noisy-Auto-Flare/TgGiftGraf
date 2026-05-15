@@ -1,7 +1,7 @@
 import time
 import logging
 from collections import Counter, deque
-from database import get_db_connection
+from database import get_db_connection, init_db
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -62,6 +62,7 @@ def calculate_reach(node, adj, max_depth=5):
     return count
 
 def run_analytics():
+    init_db()
     conn = get_db_connection()
     cursor = conn.cursor()
 

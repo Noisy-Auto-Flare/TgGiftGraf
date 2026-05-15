@@ -1,8 +1,11 @@
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from database import get_db_connection
+from database import get_db_connection, init_db
 import os
+
+# Инициализируем БД при старте
+init_db()
 
 app = FastAPI(title="Telegram Gift Graph API")
 

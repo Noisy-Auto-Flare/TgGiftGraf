@@ -78,6 +78,13 @@ def init_db():
     )
     ''')
 
+    # Проверка и добавление колонки has_photo если её нет (миграция)
+    try:
+        cursor.execute("SELECT has_photo FROM users LIMIT 1")
+    except sqlite3.OperationalError:
+        print("Добавление колонки has_photo в таблицу users...")
+        cursor.execute("ALTER TABLE users ADD COLUMN has_photo INTEGER DEFAULT 0")
+
     # Триггеры для обновления FTS
     cursor.execute('''
     CREATE TRIGGER IF NOT EXISTS users_ai AFTER INSERT ON users BEGIN

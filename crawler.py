@@ -5,7 +5,7 @@ import os
 from logging.handlers import RotatingFileHandler
 import time
 from telethon import TelegramClient, functions, types, errors
-from database import get_db_connection
+from database import get_db_connection, init_db
 from config import (
     API_ID, API_HASH, SESSION_NAME, START_USERNAMES, TARGET_CHATS,
     CRAWL_DELAY_MIN, CRAWL_DELAY_MAX, MAX_CRAWL_QUEUE_SIZE,
@@ -450,6 +450,8 @@ async def crawl():
         return
 
     async with TelegramClient(SESSION_NAME, API_ID, API_HASH) as client:
+        # Инициализация БД и миграции
+        init_db()
         conn = get_db_connection()
         
         # 0. Сброс зависших сканирований (для исправления прошлых ошибок)
