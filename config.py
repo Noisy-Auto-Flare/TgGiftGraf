@@ -20,4 +20,6 @@ RESCAN_THRESHOLD_DAYS = int(os.getenv("RESCAN_THRESHOLD_DAYS", 7))
 ANALYTICS_INTERVAL_HOURS = int(os.getenv("ANALYTICS_INTERVAL_HOURS", 6))
 MAX_CRAWL_QUEUE_SIZE = int(os.getenv("MAX_CRAWL_QUEUE_SIZE", 50000))
 
+SCAN_SELF_DIALOGS = os.getenv("SCAN_SELF_DIALOGS", "true").lower() == "true"
+
 CRAWL_SINGLE_RUN = os.getenv("CRAWL_SINGLE_RUN", "false").lower() == "true"

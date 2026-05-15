@@ -8,7 +8,8 @@ from database import get_db_connection
 from config import (
     API_ID, API_HASH, SESSION_NAME, START_USERNAMES, TARGET_CHATS,
     CRAWL_DELAY_MIN, CRAWL_DELAY_MAX, MAX_CRAWL_QUEUE_SIZE,
-    CHAT_SCAN_INTERVAL, RESCAN_THRESHOLD_DAYS, CRAWL_SINGLE_RUN
+    CHAT_SCAN_INTERVAL, RESCAN_THRESHOLD_DAYS, CRAWL_SINGLE_RUN,
+    SCAN_SELF_DIALOGS
 )
 
 # Настройка логирования с ротацией
@@ -273,6 +274,69 @@ async def init_contacts(client, conn):
     except Exception as e:
         logger.error(f"Ошибка при получении контактов: {e}")
 
+async def scan_dialogs(client, conn):
+    """Автоматически собирает пользователей из всех активных диалогов аккаунта."""
+    logger.info("Запуск автоматического сканирования ваших диалогов...")
+    try:
+        count = 0
+        async for dialog in client.iter_dialogs(limit=100):
+            entity = dialog.entity
+            if isinstance(entity, (types.Chat, types.Channel)):
+                # Собираем участников из групп или последние сообщения из каналов
+                try:
+                    if isinstance(entity, types.Chat) or (isinstance(entity, types.Channel) and entity.megagroup):
+                        async for user in client.iter_participants(entity, limit=50):
+                            if isinstance(user, types.User) and not user.bot:
+                                cursor = conn.cursor()
+                                cursor.execute('''
+                                    INSERT INTO users (id, username, first_name, discovery_source, is_bot) 
+                                    VALUES (?, ?, ?, 'dialog', ?)
+                                    ON CONFLICT(id) DO UPDATE SET 
+                                        username = COALESCE(excluded.username, users.username),
+                                        first_name = COALESCE(excluded.first_name, users.first_name),
+                                        is_bot = excluded.is_bot
+                                ''', (user.id, user.username, (user.first_name or "") + (" " + user.last_name if user.last_name else ""), 0))
+                                await add_to_queue(conn, user.id, priority=0, source='dialog')
+                                count += 1
+                            if count % 10 == 0: await human_delay(0.2, 0.5)
+                    else:
+                        # Обычный канал - берем авторов последних сообщений
+                        async for message in client.iter_messages(entity, limit=20):
+                            user = message.sender
+                            if isinstance(user, types.User) and not user.bot:
+                                cursor = conn.cursor()
+                                cursor.execute('''
+                                    INSERT INTO users (id, username, first_name, discovery_source, is_bot) 
+                                    VALUES (?, ?, ?, 'dialog_msg', ?)
+                                    ON CONFLICT(id) DO UPDATE SET 
+                                        username = COALESCE(excluded.username, users.username),
+                                        first_name = COALESCE(excluded.first_name, users.first_name),
+                                        is_bot = excluded.is_bot
+                                ''', (user.id, user.username, (user.first_name or "") + (" " + user.last_name if user.last_name else ""), 0))
+                                await add_to_queue(conn, user.id, priority=0, source='dialog')
+                                count += 1
+                            if count % 5 == 0: await human_delay(0.2, 0.5)
+                except Exception:
+                    continue
+            elif isinstance(entity, types.User) and not entity.bot:
+                # Прямой диалог с пользователем
+                cursor = conn.cursor()
+                cursor.execute('''
+                    INSERT INTO users (id, username, first_name, discovery_source, is_bot) 
+                    VALUES (?, ?, ?, 'dialog_direct', ?)
+                    ON CONFLICT(id) DO UPDATE SET 
+                        username = COALESCE(excluded.username, users.username),
+                        first_name = COALESCE(excluded.first_name, users.first_name),
+                        is_bot = excluded.is_bot
+                ''', (entity.id, entity.username, (entity.first_name or "") + (" " + entity.last_name if entity.last_name else ""), 0))
+                await add_to_queue(conn, entity.id, priority=0, source='dialog')
+                count += 1
+            
+            if count > 500: break # Лимит за один проход
+        logger.info(f"Авто-сканирование диалогов завершено. Найдено {count} потенциальных целей.")
+    except Exception as e:
+        logger.error(f"Ошибка при сканировании диалогов: {e}")
+
 async def crawl():
     if not API_ID or not API_HASH:
         logger.error("API_ID или API_HASH не заданы в .env")
@@ -303,14 +367,20 @@ async def crawl():
                         await add_to_queue(conn, u_info['id'], priority=1, source='start')
 
         last_chat_scan = 0
+        last_dialog_scan = 0
 
         while True:
             now = int(time.time())
             
             # Периодическое сканирование чатов (только в режиме цикла)
-            if not CRAWL_SINGLE_RUN and (now - last_chat_scan > (CHAT_SCAN_INTERVAL * 60)):
-                await scan_chats(client, conn)
-                last_chat_scan = now
+            if not CRAWL_SINGLE_RUN:
+                if now - last_chat_scan > (CHAT_SCAN_INTERVAL * 60):
+                    await scan_chats(client, conn)
+                    last_chat_scan = now
+                
+                if SCAN_SELF_DIALOGS and (now - last_dialog_scan > (CHAT_SCAN_INTERVAL * 60)):
+                    await scan_dialogs(client, conn)
+                    last_dialog_scan = now
 
             # Выборка пользователя
             cursor = conn.cursor()
@@ -322,12 +392,21 @@ async def crawl():
             row = cursor.fetchone()
             
             if not row:
-                if CRAWL_SINGLE_RUN:
-                    logger.info("Очередь пуста. Завершение работы (SINGLE_RUN).")
-                    break
-                logger.info("Очередь пуста. Ждем 60 секунд...")
-                await asyncio.sleep(60)
-                continue
+                if SCAN_SELF_DIALOGS and not CRAWL_SINGLE_RUN:
+                    logger.info("Очередь пуста. Пробуем экстренное сканирование диалогов...")
+                    await scan_dialogs(client, conn)
+                    last_dialog_scan = int(time.time())
+                    # Проверяем еще раз после сканирования
+                    cursor.execute('SELECT user_id FROM crawl_queue ORDER BY priority DESC, added_at ASC LIMIT 1')
+                    row = cursor.fetchone()
+                
+                if not row:
+                    if CRAWL_SINGLE_RUN:
+                        logger.info("Очередь пуста. Завершение работы (SINGLE_RUN).")
+                        break
+                    logger.info("Очередь пуста. Ждем 60 секунд...")
+                    await asyncio.sleep(60)
+                    continue
                 
             await process_user(client, conn, row['user_id'])
 
