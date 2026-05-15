@@ -4,13 +4,13 @@
 }
 
 your-domain.com {
-    # Путь к статическим файлам
-    root * /opt/giftgraph/static
+    # Путь к статическим файлам внутри контейнера
+    root * /app/static
     file_server
 
-    # Проксирование API запросов на FastAPI
+    # Проксирование API запросов на сервис 'api' в Docker сети
     handle_path /api/* {
-        reverse_proxy localhost:8000
+        reverse_proxy api:8000
     }
 
     # Логирование

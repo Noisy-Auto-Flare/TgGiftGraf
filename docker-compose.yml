@@ -1,0 +1,76 @@
+services:
+  # API Сервер
+  api:
+    build: .
+    container_name: giftgraph_api
+    restart: always
+    env_file: .env
+    volumes:
+      - ./gifts.db:/app/gifts.db
+    command: uvicorn server:app --host 0.0.0.0 --port 8000
+    depends_on:
+      init_db:
+        condition: service_completed_successfully
+
+  # Краулер
+  crawler:
+    build: .
+    container_name: giftgraph_crawler
+    restart: always
+    env_file: .env
+    volumes:
+      - ./gifts.db:/app/gifts.db
+      - ./${SESSION_NAME:-gift_crawler}.session:/app/${SESSION_NAME:-gift_crawler}.session
+      - ./crawler.log:/app/crawler.log
+    command: python crawler.py
+    depends_on:
+      init_db:
+        condition: service_completed_successfully
+
+  # Аналитика (запускается в бесконечном цикле внутри контейнера или через cron)
+  # Для простоты в Docker запустим скрипт, который спит между проходами
+  analytics:
+    build: .
+    container_name: giftgraph_analytics
+    restart: always
+    env_file: .env
+    volumes:
+      - ./gifts.db:/app/gifts.db
+    command: >
+      sh -c "while true; do 
+               python analytics.py; 
+               echo 'Analytics done, sleeping...'; 
+               sleep 21600; 
+             done"
+    depends_on:
+      init_db:
+        condition: service_completed_successfully
+
+  # Инициализация БД (однократный запуск)
+  init_db:
+    build: .
+    container_name: giftgraph_init
+    env_file: .env
+    volumes:
+      - ./gifts.db:/app/gifts.db
+    command: python database.py
+
+  # Caddy для авто-HTTPS и проксирования
+  caddy:
+    image: caddy:latest
+    container_name: giftgraph_caddy
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - ./static:/app/static
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - api
+
+volumes:
+  caddy_data:
+  caddy_config:
