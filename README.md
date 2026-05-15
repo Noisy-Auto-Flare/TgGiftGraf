@@ -27,7 +27,7 @@ cd TgGiftGraf
 
 # Создание виртуального окружения
 python3 -m venv venv
-source venv/bin/activate  # Для Windows: venv\Scripts\activate
+source venv/bin/activate  # Для Windows: venv\Scripts\activate.ps1
 
 # Установка зависимостей
 pip install -r requirements.txt
