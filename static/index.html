@@ -668,6 +668,8 @@
         function renderGraph(nodesData, edgesData, isGlobal) {
             logDebug(`Отрисовка: ${nodesData.length} узлов, ${edgesData.length} связей`);
             
+            const isSmallGraph = nodesData.length <= 500 || !isGlobal;
+            
             if (typeof vis === 'undefined') {
                 logDebug("Ошибка: библиотека vis-network не загружена!", true);
                 hideLoading();
@@ -680,17 +682,16 @@
                 return;
             }
 
-            const showAvatars = nodesData.length <= 500;
             const nodes = new vis.DataSet(nodesData.map(node => {
-                const photo = (showAvatars && node.has_photo) ? `/avatars/${node.id}.jpg` : null;
+                const photo = (isSmallGraph && node.has_photo) ? `/avatars/${node.id}.jpg` : null;
                 const clusterColor = colorPalette[node.cluster % colorPalette.length] || '#38bdf8';
                 
                 return {
                     id: node.id,
                     label: node.label,
                     shape: photo ? 'circularImage' : 'dot',
-                    image: photo || undefined, // undefined лучше чем null для vis-network
-                    size: isGlobal ? 20 : 30,
+                    image: photo || undefined,
+                    size: isGlobal ? (isSmallGraph ? 25 : 20) : 30,
                     color: {
                         background: clusterColor,
                         border: '#ffffff',
@@ -700,10 +701,12 @@
                     font: { 
                         color: '#f8fafc', 
                         size: isGlobal ? 10 : 12, 
-                        face: 'Inter'
+                        face: 'Inter',
+                        strokeWidth: isSmallGraph ? 2 : 0,
+                        strokeColor: '#0b0e14'
                     },
-                    borderWidth: 2,
-                    shadow: false
+                    borderWidth: isSmallGraph ? 3 : 2,
+                    shadow: isSmallGraph // Красивые тени для малых графов
                 };
             }));
 
@@ -713,13 +716,13 @@
                 value: edge.weight,
                 length: edge.length || (isGlobal ? 200 : 150),
                 color: { 
-                    color: 'rgba(148, 163, 184, 0.3)', 
+                    color: isSmallGraph ? 'rgba(56, 189, 248, 0.4)' : 'rgba(148, 163, 184, 0.3)', 
                     highlight: '#38bdf8',
                     hover: '#38bdf8',
-                    inherit: false // Явное отключение наследования помогает избежать null-ошибок
+                    inherit: false
                 },
                 arrows: { to: { enabled: true, scaleFactor: 0.5 } },
-                label: isGlobal ? '' : (edge.label || ''),
+                label: (isSmallGraph || !isGlobal) ? (edge.label || '') : '', // Метки только на малых графах
                 font: { 
                     color: '#38bdf8', 
                     size: 10, 
@@ -727,10 +730,10 @@
                     strokeWidth: 1, 
                     strokeColor: '#0b0e14' 
                 },
-                width: 1,
-                hoverWidth: 2,
-                selectionWidth: 2,
-                smooth: isGlobal ? false : { type: 'continuous' }
+                width: isSmallGraph ? 2 : 1,
+                hoverWidth: 3,
+                selectionWidth: 3,
+                smooth: isSmallGraph ? { type: 'continuous', roundness: 0.5 } : false // Красивые линии для малых графов
             })));
 
             const container = document.getElementById('graph-container');
@@ -738,11 +741,19 @@
             
             const options = {
                 nodes: {
-                    brokenImage: "https://ui-avatars.com/api/?name=?", // Fallback для битых фото
+                    brokenImage: "https://ui-avatars.com/api/?name=?",
                 },
                 physics: {
                     enabled: true,
-                    solver: isGlobal ? 'forceAtlas2Based' : 'barnesHut',
+                    solver: (isGlobal && !isSmallGraph) ? 'forceAtlas2Based' : 'barnesHut',
+                    barnesHut: {
+                        gravitationalConstant: -3000,
+                        centralGravity: 0.3,
+                        springLength: 150,
+                        springConstant: 0.04,
+                        damping: 0.09,
+                        avoidOverlap: 1
+                    },
                     forceAtlas2Based: {
                         gravitationalConstant: -100,
                         centralGravity: 0.01,
@@ -751,15 +762,9 @@
                         damping: 0.4,
                         avoidOverlap: 1
                     },
-                    barnesHut: {
-                        gravitationalConstant: -2000,
-                        centralGravity: 0.3,
-                        springLength: 150,
-                        springConstant: 0.04
-                    },
                     stabilization: {
                         enabled: true,
-                        iterations: isGlobal ? 800 : 150, // Уменьшаем для скорости
+                        iterations: isSmallGraph ? 200 : 800,
                         updateInterval: 50,
                         onlyDynamicEdges: false,
                         fit: true
@@ -768,15 +773,15 @@
                 interaction: {
                     hover: true,
                     tooltipDelay: 200,
-                    hideEdgesOnDrag: isGlobal, 
-                    hideEdgesOnZoom: isGlobal,
+                    hideEdgesOnDrag: !isSmallGraph, 
+                    hideEdgesOnZoom: !isSmallGraph,
                     navigationButtons: false,
                     keyboard: true,
                     multiselect: false
                 },
                 layout: {
-                    improvedLayout: !isGlobal,
-                    randomSeed: 42 // Фиксируем сид для воспроизводимости
+                    improvedLayout: isSmallGraph,
+                    randomSeed: 42
                 }
             };
 
@@ -793,21 +798,17 @@
                     showLoading(`Стабилизация: ${progress}%`);
                 });
 
-                if (isGlobal) {
-                    // Для глобального графа ждем полной стабилизации
-                    network.once("stabilizationIterationsDone", function() {
-                        logDebug("Глобальный граф стабилизирован и зафиксирован");
+                network.once("stabilizationIterationsDone", function() {
+                    if (isSmallGraph) {
+                        logDebug("Малый граф: физика остается активной");
+                        // Не отключаем физику для малых графов
+                    } else {
+                        logDebug("Большой граф: физика отключена для производительности");
                         network.setOptions({ physics: { enabled: false } });
-                        network.fit();
-                        hideLoading();
-                    });
-                } else {
-                    // Для локального можно показывать раньше
-                    network.once("stabilizationIterationsDone", function() {
-                        network.setOptions({ physics: { enabled: false } });
-                        hideLoading();
-                    });
-                }
+                    }
+                    network.fit();
+                    hideLoading();
+                });
 
                 network.on("zoom", function() {
                     adjustQuality();
@@ -828,18 +829,12 @@
                 hideLoading();
             }
             
-            // Гарантированное скрытие загрузки через 10 секунд, если стабилизация зависла
             setTimeout(() => {
                 const loader = document.getElementById('loading-overlay');
                 if (loader.style.display !== 'none') {
-                    logDebug("Принудительное завершение загрузки по тайм-ауту");
-                    if (network) {
-                        network.setOptions({ physics: { enabled: false } });
-                        network.fit();
-                    }
                     hideLoading();
                 }
-            }, 10000);
+            }, 15000);
         }
 
         let lastQuality = 'high';
