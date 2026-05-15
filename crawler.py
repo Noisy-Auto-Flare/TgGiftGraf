@@ -170,26 +170,51 @@ async def process_user(client, conn, target_user_id):
         logger.info(f"Запрос подарков для {target_user_id}...")
         await human_delay(1, 2)
         
-        # Динамически ищем метод, чтобы избежать ошибок при старых версиях Telethon
+        # Динамически ищем метод, чтобы избежать ошибок при разных версиях Telethon
         GetUserGiftsRequest = getattr(functions.payments, 'GetUserGiftsRequest', None)
-        if not GetUserGiftsRequest:
-            logger.error("Ваша версия Telethon слишком стара и не поддерживает GetUserGiftsRequest. Пожалуйста, обновите: pip install --upgrade telethon")
+        GetSavedStarGiftsRequest = getattr(functions.payments, 'GetSavedStarGiftsRequest', None)
+        
+        gifts_res = None
+        if GetUserGiftsRequest:
+            try:
+                gifts_res = await client(GetUserGiftsRequest(
+                    user_id=input_entity,
+                    offset='',
+                    limit=100
+                ))
+            except Exception as e:
+                logger.debug(f"GetUserGiftsRequest failed: {e}")
+
+        if not gifts_res and GetSavedStarGiftsRequest:
+            try:
+                gifts_res = await client(GetSavedStarGiftsRequest(
+                    peer=input_entity,
+                    offset='',
+                    limit=100
+                ))
+            except Exception as e:
+                logger.debug(f"GetSavedStarGiftsRequest failed: {e}")
+
+        if not gifts_res:
+            logger.error("Ваша версия Telethon не поддерживает получение подарков или метод недоступен. Пожалуйста, обновите: pip install --upgrade telethon")
             # Помечаем пользователя, чтобы не зацикливаться, но не удаляем (вдруг обновите)
             cursor.execute("UPDATE users SET last_scanned = ? WHERE id = ?", (int(time.time()), target_user_id))
             cursor.execute("DELETE FROM crawl_queue WHERE user_id = ?", (target_user_id,))
             conn.commit()
             return
 
-        gifts_res = await client(GetUserGiftsRequest(
-            user_id=input_entity,
-            offset='',
-            limit=100
-        ))
-        
         if hasattr(gifts_res, 'gifts'):
             for gift_attr in gifts_res.gifts:
                 from_id = getattr(gift_attr, 'from_id', None)
-                gift_date = getattr(gift_attr, 'date', 0)
+                
+                # Конвертируем дату в timestamp если это datetime
+                gift_date_obj = getattr(gift_attr, 'date', 0)
+                if isinstance(gift_date_obj, int):
+                    gift_date = gift_date_obj
+                elif hasattr(gift_date_obj, 'timestamp'):
+                    gift_date = int(gift_date_obj.timestamp())
+                else:
+                    gift_date = int(time.time())
                 
                 gift_title = "Подарок"
                 if hasattr(gift_attr, 'gift'):
