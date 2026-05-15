@@ -799,8 +799,13 @@
                 });
 
                 network.once("stabilizationIterationsDone", function() {
-                    logDebug("Стабилизация завершена, фиксирую узлы");
-                    network.setOptions({ physics: { enabled: false } });
+                    if (!isSmallGraph) {
+                        logDebug("Большой граф стабилизирован и зафиксирован");
+                        network.setOptions({ physics: { enabled: false } });
+                    } else {
+                        logDebug("Локальный граф готов (физика активна)");
+                        // Для локальных графов не отключаем физику, чтобы они были "живыми"
+                    }
                     network.fit();
                     hideLoading();
                 });
