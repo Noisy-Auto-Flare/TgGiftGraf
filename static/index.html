@@ -270,6 +270,8 @@
             z-index: 1000;
             gap: 1rem;
             transition: opacity 0.5s;
+            pointer-events: none; /* Чтобы не блокировать клики, если зависнет */
+            opacity: 1;
         }
         .spinner {
             width: 40px;
@@ -426,28 +428,49 @@
             searchResults.style.display = 'block';
         }
 
+        function showLoading() {
+            const loader = document.getElementById('loading-overlay');
+            loader.style.display = 'flex';
+            loader.style.opacity = '1';
+        }
+
+        function hideLoading() {
+            const loader = document.getElementById('loading-overlay');
+            loader.style.opacity = '0';
+            setTimeout(() => {
+                loader.style.display = 'none';
+            }, 500);
+        }
+
         async function switchMode(mode) {
             currentMode = mode;
             document.getElementById('btn-local').classList.toggle('active', mode === 'local');
             document.getElementById('btn-global').classList.toggle('active', mode === 'global');
             
+            showLoading();
             if (mode === 'global') {
-                loadGlobalGraph();
+                await loadGlobalGraph();
             } else {
-                // Load some default or last local
                 const res = await fetch('/api/stats/top-reach?limit=1');
                 const data = await res.json();
-                if (data.length > 0) loadGraph(data[0].id);
+                if (data.length > 0) await loadGraph(data[0].id);
+                else hideLoading();
             }
         }
 
         async function loadGlobalGraph() {
-            const res = await fetch('/api/graph/global?limit=200');
-            const data = await res.json();
-            renderGraph(data.nodes, data.edges, true);
+            try {
+                const res = await fetch('/api/graph/global?limit=200');
+                const data = await res.json();
+                renderGraph(data.nodes, data.edges, true);
+            } catch (e) { 
+                console.error(e);
+                hideLoading();
+            }
         }
 
         async function loadGraph(userId) {
+            showLoading();
             try {
                 const res = await fetch(`/api/users/${userId}/graph`);
                 const data = await res.json();
@@ -456,7 +479,10 @@
                 if (user) {
                     updateUserInfo(data.stats, user);
                 }
-            } catch (e) { console.error("Error loading graph:", e); }
+            } catch (e) { 
+                console.error("Error loading graph:", e);
+                hideLoading();
+            }
         }
 
         async function runAnalytics() {
@@ -538,21 +564,13 @@
             if (network) network.destroy();
             network = new vis.Network(container, data, options);
 
-            // Hide loading overlay after stabilization
+            // Hide loading overlay after stabilization or 3 seconds max
             network.once("stabilizationIterationsDone", function() {
-                document.getElementById('loading-overlay').style.opacity = '0';
-                setTimeout(() => {
-                    document.getElementById('loading-overlay').style.display = 'none';
-                }, 500);
+                hideLoading();
             });
             
             // Fallback for small graphs where stabilization is instant
-            setTimeout(() => {
-                document.getElementById('loading-overlay').style.opacity = '0';
-                setTimeout(() => {
-                    document.getElementById('loading-overlay').style.display = 'none';
-                }, 500);
-            }, 2000);
+            setTimeout(hideLoading, 1500);
 
             network.on("click", function (params) {
                 if (params.nodes.length > 0) {
