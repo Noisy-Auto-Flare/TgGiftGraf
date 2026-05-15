@@ -116,6 +116,9 @@
         #graph-container {
             flex: 1;
             background: transparent;
+            width: 100%;
+            height: 100%;
+            min-height: 400px; /* Гарантируем минимальную высоту */
         }
         #sidebar {
             width: 380px;
@@ -516,6 +519,14 @@
         }
 
         function renderGraph(nodesData, edgesData, isGlobal) {
+            console.log(`Rendering graph: ${nodesData.length} nodes, ${edgesData.length} edges`);
+            
+            if (nodesData.length === 0) {
+                console.warn("No nodes to render");
+                hideLoading();
+                return;
+            }
+
             const nodes = new vis.DataSet(nodesData.map(node => {
                 const photo = node.has_photo ? `/avatars/${node.id}.jpg` : null;
                 return {
@@ -548,21 +559,49 @@
             const data = { nodes, edges };
             const options = {
                 physics: {
-                    stabilization: true,
+                    enabled: true,
+                    stabilization: {
+                        enabled: true,
+                        iterations: 1000,
+                        updateInterval: 25
+                    },
                     barnesHut: {
                         gravitationalConstant: -2000,
+                        centralGravity: 0.3,
+                        springLength: isGlobal ? 200 : 150,
                         springConstant: 0.04,
-                        springLength: isGlobal ? 200 : 150
+                        damping: 0.09,
+                        avoidOverlap: 0.1
+                    }
+                },
+                nodes: {
+                    font: {
+                        strokeWidth: 4,
+                        strokeColor: '#0b0e14'
+                    }
+                },
+                edges: {
+                    smooth: {
+                        type: 'continuous',
+                        forceDirection: 'none'
                     }
                 },
                 interaction: {
                     hover: true,
-                    tooltipDelay: 200
+                    tooltipDelay: 200,
+                    hideEdgesOnDrag: false,
+                    hideNodesOnDrag: false
                 }
             };
 
             if (network) network.destroy();
             network = new vis.Network(container, data, options);
+
+            // Force fit and redraw
+            network.once("afterDrawing", function() {
+                network.fit();
+                console.log("Graph fit complete");
+            });
 
             // Hide loading overlay after stabilization or 3 seconds max
             network.once("stabilizationIterationsDone", function() {
