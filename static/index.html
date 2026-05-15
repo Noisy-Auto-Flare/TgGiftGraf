@@ -747,12 +747,12 @@
                     enabled: true,
                     solver: (isGlobal && !isSmallGraph) ? 'forceAtlas2Based' : 'barnesHut',
                     barnesHut: {
-                        gravitationalConstant: -3000,
+                        gravitationalConstant: -2000,
                         centralGravity: 0.3,
                         springLength: 150,
-                        springConstant: 0.04,
-                        damping: 0.09,
-                        avoidOverlap: 1
+                        springConstant: 0.05,
+                        damping: 0.5, // Увеличено с 0.09 до 0.5 для гашения колебаний
+                        avoidOverlap: 0.5 // Снижено для более мягкого взаимодействия
                     },
                     forceAtlas2Based: {
                         gravitationalConstant: -100,
