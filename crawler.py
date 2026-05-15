@@ -23,9 +23,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-async def human_delay(min_sec=1, max_sec=3):
+async def human_delay(min_sec=1.0, max_sec=3.0):
     """Небольшая пауза между API запросами для имитации человека."""
-    await asyncio.sleep(random.uniform(min_sec, max_sec))
+    await asyncio.sleep(random.uniform(float(min_sec), float(max_sec)))
 
 async def get_user_info(client, entity_id):
     """Получает информацию о пользователе с обработкой ошибок и паузой."""
@@ -49,10 +49,10 @@ async def get_user_info(client, entity_id):
     except (errors.UserDeactivatedError, errors.UsernameInvalidError, errors.UserIdInvalidError):
         logger.warning(f"Пользователь {entity_id} деактивирован или невалиден.")
         return None
-    except errors.PrivateUserError:
-        logger.warning(f"Профиль {entity_id} скрыт настройками приватности.")
-        return None
     except Exception as e:
+        if "PrivacyError" in str(e) or "PrivateUserError" in str(e):
+            logger.warning(f"Профиль {entity_id} скрыт настройками приватности.")
+            return None
         logger.debug(f"Не удалось получить инфо для {entity_id}: {e}")
         return None
 
@@ -204,15 +204,14 @@ async def process_user(client, conn, target_user_id):
         cursor.execute("DELETE FROM crawl_queue WHERE user_id = ?", (target_user_id,))
         cursor.execute("DELETE FROM edges WHERE from_user_id = ? OR to_user_id = ?", (target_user_id, target_user_id))
         conn.commit()
-    except errors.PrivateUserError:
-        logger.info(f"Профиль {target_user_id} приватный. Пропускаем.")
-        cursor.execute("UPDATE users SET last_scanned = ? WHERE id = ?", (int(time.time()), target_user_id))
-        cursor.execute("DELETE FROM crawl_queue WHERE user_id = ?", (target_user_id,))
-        conn.commit()
     except Exception as e:
-        # Проверка на ошибку доступности метода (Premium и т.д.)
         err_str = str(e)
-        if "METHOD_NOT_AVAILABLE" in err_str or "RPCError 400" in err_str:
+        if "PrivacyError" in err_str or "PrivateUserError" in err_str:
+            logger.info(f"Профиль {target_user_id} приватный. Пропускаем.")
+            cursor.execute("UPDATE users SET last_scanned = ? WHERE id = ?", (int(time.time()), target_user_id))
+            cursor.execute("DELETE FROM crawl_queue WHERE user_id = ?", (target_user_id,))
+            conn.commit()
+        elif "METHOD_NOT_AVAILABLE" in err_str or "RPCError 400" in err_str:
             logger.warning(f"Метод GetUserGifts недоступен для {target_user_id}: {e}")
             cursor.execute("UPDATE users SET last_scanned = ? WHERE id = ?", (int(time.time()), target_user_id))
             cursor.execute("DELETE FROM crawl_queue WHERE user_id = ?", (target_user_id,))
@@ -223,6 +222,29 @@ async def process_user(client, conn, target_user_id):
             cursor.execute("DELETE FROM crawl_queue WHERE user_id = ?", (target_user_id,))
             conn.commit()
 
+async def init_contacts(client, conn):
+    """Инициализирует очередь из контактов пользователя."""
+    logger.info("Запуск инициализации из контактов...")
+    try:
+        contacts = await client(functions.contacts.GetContactsRequest(hash=0))
+        if isinstance(contacts, types.contacts.Contacts):
+            for user in contacts.users:
+                # Проверяем, что это действительно пользователь, а не пустая запись
+                if isinstance(user, types.User) and not user.bot:
+                    cursor = conn.cursor()
+                    cursor.execute('''
+                        INSERT INTO users (id, username, first_name, discovery_source, is_bot) 
+                        VALUES (?, ?, ?, 'contact', ?)
+                        ON CONFLICT(id) DO UPDATE SET 
+                            username = COALESCE(excluded.username, users.username),
+                            first_name = COALESCE(excluded.first_name, users.first_name),
+                            is_bot = excluded.is_bot
+                    ''', (user.id, user.username, (user.first_name or "") + (" " + user.last_name if user.last_name else ""), 0))
+                    await add_to_queue(conn, user.id, priority=1, source='contact')
+            logger.info(f"Добавлено {len(contacts.users)} контактов в очередь.")
+    except Exception as e:
+        logger.error(f"Ошибка при получении контактов: {e}")
+
 async def crawl():
     if not API_ID or not API_HASH:
         logger.error("API_ID или API_HASH не заданы в .env")
@@ -232,17 +254,25 @@ async def crawl():
         conn = get_db_connection()
         
         # 1. Инициализация
-        for username in START_USERNAMES:
-            u_info = await get_user_info(client, username)
-            if u_info:
-                cursor = conn.cursor()
-                cursor.execute('''
-                    INSERT INTO users (id, username, first_name, discovery_source, is_bot) 
-                    VALUES (?, ?, ?, 'start', ?)
-                    ON CONFLICT(id) DO UPDATE SET username=excluded.username, first_name=excluded.first_name, is_bot=excluded.is_bot
-                ''', (u_info['id'], u_info['username'], u_info['first_name'], 1 if u_info['is_bot'] else 0))
-                if not u_info['is_bot']:
-                    await add_to_queue(conn, u_info['id'], priority=1, source='start')
+        # Если START_USERNAMES пуст, пробуем контакты
+        if not START_USERNAMES:
+            # Проверяем, пуста ли база пользователей
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) as count FROM users")
+            if cursor.fetchone()['count'] == 0:
+                await init_contacts(client, conn)
+        else:
+            for username in START_USERNAMES:
+                u_info = await get_user_info(client, username)
+                if u_info:
+                    cursor = conn.cursor()
+                    cursor.execute('''
+                        INSERT INTO users (id, username, first_name, discovery_source, is_bot) 
+                        VALUES (?, ?, ?, 'start', ?)
+                        ON CONFLICT(id) DO UPDATE SET username=excluded.username, first_name=excluded.first_name, is_bot=excluded.is_bot
+                    ''', (u_info['id'], u_info['username'], u_info['first_name'], 1 if u_info['is_bot'] else 0))
+                    if not u_info['is_bot']:
+                        await add_to_queue(conn, u_info['id'], priority=1, source='start')
 
         last_chat_scan = 0
 
