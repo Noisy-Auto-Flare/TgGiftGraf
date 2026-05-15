@@ -29,62 +29,33 @@ async def human_delay(min_sec=1.0, max_sec=3.0):
     """Небольшая пауза между API запросами для имитации человека."""
     await asyncio.sleep(random.uniform(float(min_sec), float(max_sec)))
 
-async def download_profile_photo(client, user_id, entity, full_user_obj=None):
-    """Скачивает фото профиля пользователя, включая публичное (fallback) фото."""
+async def download_profile_photo(client, user_id, entity):
+    """Скачивает фото профиля пользователя максимально быстро (только если доступно напрямую)."""
     try:
         path = f"static/avatars/{user_id}.jpg"
         
-        # Если файл уже есть, считаем что скачали успешно
+        # Если файл уже есть и он не пустой, не тратим ресурсы
         if os.path.exists(path) and os.path.getsize(path) > 0:
             return True
 
-        # 1. Пробуем скачать основное фото
-        has_main_photo = hasattr(entity, 'photo') and entity.photo
-        if has_main_photo:
-            logger.debug(f"Попытка скачать основное фото для {user_id}...")
+        # Пробуем скачать только если фото доступно в базовом объекте
+        if hasattr(entity, 'photo') and entity.photo:
+            logger.debug(f"Скачивание фото для {user_id}...")
             await client.download_profile_photo(entity, file=path, download_big=False)
             if os.path.exists(path) and os.path.getsize(path) > 0:
-                logger.info(f"Основное фото для {user_id} успешно сохранено.")
                 return True
-
-        # 2. Если основного нет или не удалось, пробуем публичное (fallback) из FullUser
-        if full_user_obj and hasattr(full_user_obj, 'full_user'):
-            full = full_user_obj.full_user
-            fallback = getattr(full, 'fallback_photo', None)
-            personal = getattr(full, 'personal_photo', None)
-            
-            # Пробуем личное фото (если доступно) или публичное
-            for photo in [personal, fallback]:
-                if photo:
-                    logger.debug(f"Попытка скачать альтернативное фото для {user_id}...")
-                    await client.download_media(photo, file=path)
-                    if os.path.exists(path) and os.path.getsize(path) > 0:
-                        logger.info(f"Альтернативное фото для {user_id} успешно сохранено.")
-                        return True
-        
-        logger.debug(f"У пользователя {user_id} нет доступных фото профиля.")
     except Exception as e:
-        logger.warning(f"Ошибка при скачивании фото для {user_id}: {e}")
+        logger.debug(f"Не удалось скачать фото для {user_id}: {e}")
     return False
 
 async def get_user_info(client, entity_id):
-    """Получает детальную информацию о пользователе."""
+    """Получает базовую информацию о пользователе БЕЗ тяжелых запросов."""
     try:
-        await human_delay(0.5, 1.5)
+        await human_delay(0.2, 0.5) # Минимальная пауза
         entity = await client.get_entity(entity_id)
         
-        full_user_obj = None
-        # Запрашиваем FullUser ТОЛЬКО если фото нет на диске И оно скрыто в основном объекте
-        photo_path = f"static/avatars/{entity.id}.jpg"
-        if not (os.path.exists(photo_path) and os.path.getsize(photo_path) > 0):
-            if not getattr(entity, 'photo', None):
-                try:
-                    logger.debug(f"Основное фото скрыто для {entity.id}, пробуем получить публичное...")
-                    full_user_obj = await client(functions.users.GetFullUserRequest(id=entity))
-                except Exception as e:
-                    logger.debug(f"Не удалось получить FullUser для {entity.id}: {e}")
-            
-        has_photo = await download_profile_photo(client, entity.id, entity, full_user_obj)
+        has_photo = await download_profile_photo(client, entity.id, entity)
+        
         if isinstance(entity, types.User):
             return {
                 'id': entity.id,
@@ -100,14 +71,8 @@ async def get_user_info(client, entity_id):
             'is_bot': False,
             'has_photo': 1 if has_photo else 0
         }
-    except (errors.UserDeactivatedError, errors.UsernameInvalidError, errors.UserIdInvalidError):
-        logger.warning(f"Пользователь {entity_id} деактивирован или невалиден.")
-        return None
     except Exception as e:
-        if "PrivacyError" in str(e) or "PrivateUserError" in str(e):
-            logger.warning(f"Профиль {entity_id} скрыт настройками приватности.")
-            return None
-        logger.debug(f"Не удалось получить инфо для {entity_id}: {e}")
+        logger.error(f"Ошибка при получении инфо {entity_id}: {e}")
         return None
 
 async def add_to_queue(conn, user_id, priority=0, source='unknown'):
@@ -220,18 +185,8 @@ async def process_user(client, conn, target_user_id):
             full_entity = await client.get_entity(target_user_id)
             input_entity = await client.get_input_entity(full_entity)
             
-            full_user = None
-            # Если фото нет на диске И оно скрыто, пробуем получить публичное через FullUser
-            photo_path = f"static/avatars/{target_user_id}.jpg"
-            if not (os.path.exists(photo_path) and os.path.getsize(photo_path) > 0):
-                if not getattr(full_entity, 'photo', None):
-                    try:
-                        full_user = await client(functions.users.GetFullUserRequest(id=input_entity))
-                    except Exception as e:
-                        logger.debug(f"Не удалось получить FullUser для {target_user_id}: {e}")
-
-            # Пытаемся скачать фото, теперь с поддержкой FullUser (fallback photo)
-            has_photo_now = await download_profile_photo(client, target_user_id, full_entity, full_user)
+            # Пытаемся скачать фото
+            has_photo_now = await download_profile_photo(client, target_user_id, full_entity)
             cursor.execute("UPDATE users SET has_photo = ? WHERE id = ?", (1 if has_photo_now else 0, target_user_id))
         except (errors.UserIdInvalidError, ValueError) as e:
             logger.warning(f"Не удалось получить сущность для {target_user_id}: {e}. Удаляем из очереди.")
@@ -342,12 +297,7 @@ async def process_user(client, conn, target_user_id):
                         if not (os.path.exists(photo_path) and os.path.getsize(photo_path) > 0):
                             try:
                                 sender_entity = await client.get_entity(u_info['id'])
-                                sender_full = None
-                                # Если основное фото скрыто, запрашиваем FullUser для получения публичного фото
-                                if not getattr(sender_entity, 'photo', None):
-                                    sender_full = await client(functions.users.GetFullUserRequest(id=sender_entity))
-                                
-                                if await download_profile_photo(client, u_info['id'], sender_entity, sender_full):
+                                if await download_profile_photo(client, u_info['id'], sender_entity):
                                     u_info['has_photo'] = 1
                             except Exception as e:
                                 logger.debug(f"Не удалось скачать фото для отправителя {u_info['id']}: {e}")
