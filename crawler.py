@@ -29,18 +29,42 @@ async def human_delay(min_sec=1.0, max_sec=3.0):
     """Небольшая пауза между API запросами для имитации человека."""
     await asyncio.sleep(random.uniform(float(min_sec), float(max_sec)))
 
-async def download_profile_photo(client, user_id, entity):
-    """Скачивает фото профиля пользователя, если оно есть."""
+async def download_profile_photo(client, user_id, entity, full_user_obj=None):
+    """Скачивает фото профиля пользователя, включая публичное (fallback) фото."""
     try:
         path = f"static/avatars/{user_id}.jpg"
-        if os.path.exists(path):
+        
+        # Если файл уже есть, считаем что скачали успешно
+        if os.path.exists(path) and os.path.getsize(path) > 0:
             return True
+
+        # 1. Пробуем скачать основное фото
+        has_main_photo = hasattr(entity, 'photo') and entity.photo
+        if has_main_photo:
+            logger.debug(f"Попытка скачать основное фото для {user_id}...")
+            await client.download_profile_photo(entity, file=path, download_big=False)
+            if os.path.exists(path) and os.path.getsize(path) > 0:
+                logger.info(f"Основное фото для {user_id} успешно сохранено.")
+                return True
+
+        # 2. Если основного нет или не удалось, пробуем публичное (fallback) из FullUser
+        if full_user_obj and hasattr(full_user_obj, 'full_user'):
+            full = full_user_obj.full_user
+            fallback = getattr(full, 'fallback_photo', None)
+            personal = getattr(full, 'personal_photo', None)
             
-        await client.download_profile_photo(entity, file=path, download_big=False)
-        if os.path.exists(path):
-            return True
+            # Пробуем личное фото (если доступно) или публичное
+            for photo in [personal, fallback]:
+                if photo:
+                    logger.debug(f"Попытка скачать альтернативное фото для {user_id}...")
+                    await client.download_media(photo, file=path)
+                    if os.path.exists(path) and os.path.getsize(path) > 0:
+                        logger.info(f"Альтернативное фото для {user_id} успешно сохранено.")
+                        return True
+        
+        logger.debug(f"У пользователя {user_id} нет доступных фото профиля.")
     except Exception as e:
-        logger.debug(f"Не удалось скачать фото для {user_id}: {e}")
+        logger.warning(f"Ошибка при скачивании фото для {user_id}: {e}")
     return False
 
 async def get_user_info(client, entity_id):
@@ -49,7 +73,15 @@ async def get_user_info(client, entity_id):
         # Пауза перед запросом
         await human_delay(0.5, 1.5)
         entity = await client.get_entity(entity_id)
-        has_photo = await download_profile_photo(client, entity.id, entity)
+        
+        full_user_obj = None
+        # Если основного фото нет, пробуем получить FullUser для публичного фото
+        if not getattr(entity, 'photo', None):
+            try:
+                full_user_obj = await client(functions.users.GetFullUserRequest(id=entity))
+            except: pass
+            
+        has_photo = await download_profile_photo(client, entity.id, entity, full_user_obj)
         if isinstance(entity, types.User):
             return {
                 'id': entity.id,
@@ -189,8 +221,9 @@ async def process_user(client, conn, target_user_id):
             conn.commit()
             return
 
-        # Проверка количества подарков через FullUser (опционально, для отладки)
+        # Проверка количества подарков через FullUser
         star_gifts_count = 0
+        full_user = None
         try:
             full_user = await client(functions.users.GetFullUserRequest(id=input_entity))
             star_gifts_count = getattr(full_user.full_user, 'star_gifts_count', 0)
@@ -201,6 +234,10 @@ async def process_user(client, conn, target_user_id):
         except Exception as e:
             logger.debug(f"Не удалось получить FullUser для {target_user_id}: {e}")
 
+        # Пытаемся скачать фото, теперь с поддержкой FullUser (fallback photo)
+        has_photo_now = await download_profile_photo(client, target_user_id, full_entity, full_user)
+        cursor.execute("UPDATE users SET has_photo = ? WHERE id = ?", (1 if has_photo_now else 0, target_user_id))
+        
         # Нативный запрос подарков
         logger.info(f"Запрос подарков для {target_user_id}...")
         await human_delay(0.5, 1.0)
@@ -299,6 +336,20 @@ async def process_user(client, conn, target_user_id):
                         u_info = await get_user_info(client, sender_id)
 
                     if u_info and not u_info['is_bot']:
+                        # Пытаемся скачать фото для отправителя, если его еще нет
+                        if not u_info.get('has_photo'):
+                            try:
+                                sender_entity = await client.get_entity(u_info['id'])
+                                sender_full = None
+                                # Если основное фото скрыто, запрашиваем FullUser для получения публичного фото
+                                if not getattr(sender_entity, 'photo', None):
+                                    sender_full = await client(functions.users.GetFullUserRequest(id=sender_entity))
+                                
+                                if await download_profile_photo(client, u_info['id'], sender_entity, sender_full):
+                                    u_info['has_photo'] = 1
+                            except Exception as e:
+                                logger.debug(f"Не удалось скачать фото для отправителя {u_info['id']}: {e}")
+
                         # Сохраняем пользователя (на случай если его нет в БД)
                         cursor.execute('''
                             INSERT INTO users (id, username, first_name, discovery_source, is_bot, has_photo) 
@@ -306,7 +357,7 @@ async def process_user(client, conn, target_user_id):
                             ON CONFLICT(id) DO UPDATE SET 
                                 username = COALESCE(excluded.username, users.username),
                                 first_name = COALESCE(excluded.first_name, users.first_name),
-                                has_photo = COALESCE(excluded.has_photo, users.has_photo)
+                                has_photo = CASE WHEN users.has_photo = 1 THEN 1 ELSE excluded.has_photo END
                         ''', (u_info['id'], u_info['username'], u_info['first_name'], u_info.get('has_photo', 0)))
 
                         # Сохраняем связь
