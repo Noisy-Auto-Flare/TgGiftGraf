@@ -52,7 +52,6 @@ async def get_user_graph(identifier: str, depth: int = 1):
         raise HTTPException(status_code=404, detail="User not found")
 
     # Получаем рёбра (ego-graph depth=1)
-    # Выбираем рёбра, где пользователь отправитель или получатель
     cursor.execute("""
         SELECT e.*, u1.username as from_username, u2.username as to_username
         FROM edges e
@@ -62,7 +61,7 @@ async def get_user_graph(identifier: str, depth: int = 1):
     """, (user_id, user_id))
     edges_rows = cursor.fetchall()
     
-    nodes_ids = set()
+    nodes_ids = {user_id} # Всегда включаем искомого пользователя
     edges = []
     for row in edges_rows:
         nodes_ids.add(row['from_user_id'])
@@ -71,7 +70,7 @@ async def get_user_graph(identifier: str, depth: int = 1):
             "from": row['from_user_id'],
             "to": row['to_user_id'],
             "weight": row['weight'],
-            "title": f"Последний подарок: {row['last_gift_title']}"
+            "title": f"Подарков: {row['weight']}\nПоследний: {row['last_gift_title']}"
         })
     
     # Получаем информацию об узлах (включая кластеры и источник)
@@ -191,6 +190,15 @@ async def get_top_reach(limit: int = 10):
     results = [dict(row) for row in cursor.fetchall()]
     conn.close()
     return results
+
+@app.post("/api/analytics/run")
+async def run_analytics_endpoint():
+    from analytics import run_analytics
+    try:
+        run_analytics()
+        return {"status": "success"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/stats/summary")
 async def get_summary():

@@ -247,9 +247,45 @@
             background: rgba(255, 255, 255, 0.1);
             border-radius: 3px;
         }
+        .btn.loading::after {
+            content: '';
+            width: 12px;
+            height: 12px;
+            border: 2px solid currentColor;
+            border-right-color: transparent;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        #loading-overlay {
+            position: absolute;
+            inset: 0;
+            background: var(--bg-color);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            gap: 1rem;
+            transition: opacity 0.5s;
+        }
+        .spinner {
+            width: 40px;
+            height: 40px;
+            border: 3px solid var(--glass-border);
+            border-top-color: var(--accent-color);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
     </style>
 </head>
 <body>
+    <div id="loading-overlay">
+        <div class="spinner"></div>
+        <p style="color: var(--text-secondary); font-size: 0.875rem;">Загрузка графа...</p>
+    </div>
     <header>
         <div class="logo">GIFT GRAPH</div>
         <div class="search-container">
@@ -265,6 +301,9 @@
             </button>
             <button class="btn" id="btn-global" onclick="switchMode('global')">
                 <span>🌐</span> Общий граф
+            </button>
+            <button class="btn" id="btn-analytics" onclick="runAnalytics()" title="Пересчитать охваты и кластеры">
+                <span>📊</span> Аналитика
             </button>
         </div>
         <aside id="sidebar">
@@ -409,10 +448,31 @@
         }
 
         async function loadGraph(userId) {
-            const res = await fetch(`/api/users/${userId}/graph`);
-            const data = await res.json();
-            renderGraph(data.nodes, data.edges, false);
-            updateUserInfo(data.stats, data.nodes.find(n => n.id === data.stats.user_id));
+            try {
+                const res = await fetch(`/api/users/${userId}/graph`);
+                const data = await res.json();
+                renderGraph(data.nodes, data.edges, false);
+                const user = data.nodes.find(n => n.id === data.stats.user_id);
+                if (user) {
+                    updateUserInfo(data.stats, user);
+                }
+            } catch (e) { console.error("Error loading graph:", e); }
+        }
+
+        async function runAnalytics() {
+            const btn = document.getElementById('btn-analytics');
+            btn.classList.add('loading', 'active');
+            btn.disabled = true;
+            try {
+                const res = await fetch('/api/analytics/run', { method: 'POST' });
+                if (res.ok) {
+                    alert('Аналитика успешно выполнена! Обновите граф.');
+                    updateSummary();
+                    updateTopReach();
+                }
+            } catch (e) { console.error(e); }
+            btn.classList.remove('loading', 'active');
+            btn.disabled = false;
         }
 
         function updateUserInfo(stats, user) {
@@ -477,6 +537,22 @@
 
             if (network) network.destroy();
             network = new vis.Network(container, data, options);
+
+            // Hide loading overlay after stabilization
+            network.once("stabilizationIterationsDone", function() {
+                document.getElementById('loading-overlay').style.opacity = '0';
+                setTimeout(() => {
+                    document.getElementById('loading-overlay').style.display = 'none';
+                }, 500);
+            });
+            
+            // Fallback for small graphs where stabilization is instant
+            setTimeout(() => {
+                document.getElementById('loading-overlay').style.opacity = '0';
+                setTimeout(() => {
+                    document.getElementById('loading-overlay').style.display = 'none';
+                }, 500);
+            }, 2000);
 
             network.on("click", function (params) {
                 if (params.nodes.length > 0) {
