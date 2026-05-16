@@ -2,94 +2,156 @@
 
 Приложение для сбора, анализа и визуализации графа подарков в Telegram.
 
-## Принцип работы краулера
-
-Краулер построен на базе **Telethon** и реализует стратегию "умного расширения" графа:
-
-1.  **Инициализация (Семена)**:
-    *   Если указаны `START_USERNAMES` в `.env`, краулер начинает с них.
-    *   **Авто-обнаружение**: Если список пуст, краулер автоматически импортирует ваши **контакты** и **активные диалоги** (группы, чаты) как начальные точки. Это позволяет запустить программу "в один клик" без ручной настройки целей.
-    *   Также краулер периодически собирает участников из публичных чатов, указанных в `TARGET_CHATS`.
-2.  **Приоритизация**: Новые связи (отправители подарков) обрабатываются в первую очередь для быстрого роста графа.
-3.  **Анти-флуд**: Микро-паузы между каждым API-запросом и случайные задержки между пользователями для имитации человеческого поведения.
+## Возможности
+- **Deep Crawling**: Сбор всей истории подарков пользователя с обходом лимитов API.
+- **Локальные графы**: Визуализация связей конкретного человека на любую глубину.
+- **Глобальный граф**: Фильтрация и сортировка всей базы (по связям, сумме подарков, дате добавления).
+- **Авто-обнаружение**: Сбор целей из ваших контактов, диалогов и публичных чатов.
+- **Умное хранение**: Ограничение размера папки с аватарами для экономии места на сервере.
 
 ---
 
-## Локальная разработка (Development)
+## Подготовка (API Telegram)
 
-Для запуска на локальной машине с целью отладки или разработки:
-
-### 1. Подготовка
-```bash
-# Клонирование и переход в папку
-git clone https://github.com/youruser/TgGiftGraf.git
-cd TgGiftGraf
-
-# Создание виртуального окружения
-python3 -m venv venv
-source venv/bin/activate  # Для Windows: venv\Scripts\activate.ps1
-
-# Установка зависимостей
-pip install -r requirements.txt
-```
-
-### 2. Настройка
-Создайте файл `.env` из примера:
-```bash
-cp .env.example .env
-```
-Заполните `API_ID` и `API_HASH`. Если хотите начать с контактов, оставьте `START_USERNAMES` пустым.
-
-### 3. Запуск
-```bash
-# Инициализация БД
-python3 database.py
-
-# Первый запуск краулера (интерактивный ввод кода подтверждения)
-python3 crawler.py
-
-# В отдельном терминале запуск API
-uvicorn server:app --reload --port 8000
-
-# Запуск аналитики (вручную при необходимости)
-python3 analytics.py
-```
-Фронтенд будет доступен по адресу `http://localhost:8000`.
+Перед установкой вам необходимо получить ключи API:
+1. Зайдите на [my.telegram.org](https://my.telegram.org/).
+2. Перейдите в раздел **API development tools**.
+3. Создайте приложение (App title и Short name любые).
+4. Сохраните `api_id` и `api_hash`.
 
 ---
 
-## Продакшн развертывание (Production)
+## Установка на сервер (VPS) с нуля
 
-Для работы на сервере (например, VPS 1 ГБ ОЗУ) рекомендуется использовать **Docker Compose**.
+Рекомендуется использовать сервер с ОС **Ubuntu 22.04+** и минимум **1 ГБ ОЗУ**.
 
-### 1. Установка
+### Вариант А: Через Docker (Рекомендуется)
+
+Самый быстрый способ, включающий авто-обновление SSL и изоляцию сервисов.
+
+#### 1. Установка Docker
+```bash
+curl -fsSL https://get.docker.com -o get-docker.sh
+sudo sh get-docker.sh
+```
+
+#### 2. Клонирование и настройка
 ```bash
 git clone https://github.com/youruser/TgGiftGraf.git
 cd TgGiftGraf
 cp .env.example .env
-# Отредактируйте .env и укажите ваш домен в Caddyfile
+nano .env # Введите ваши API_ID, API_HASH и другие настройки
 ```
 
-### 2. Авторизация (Обязательно)
-Docker-контейнеры работают в фоне, поэтому первый запуск для ввода кода нужно сделать вручную:
+#### 3. Настройка домена
+Откройте `Caddyfile` и замените `your-domain.com` на ваш реальный домен:
+```bash
+nano Caddyfile
+```
+
+#### 4. Первая авторизация
+Поскольку контейнеры работают в фоне, нужно один раз войти в аккаунт интерактивно:
 ```bash
 docker compose run --rm crawler python crawler.py
 ```
-Введите номер телефона и код. Файл `.session` сохранится в папке проекта.
+Введите номер телефона и код из Telegram.
 
-### 3. Запуск в фоне
+#### 5. Запуск
 ```bash
 docker compose up -d
 ```
-Docker автоматически поднимет API, Краулер, Аналитику (с авто-перезапуском каждые 6 часов) и Caddy с авто-HTTPS.
+Сайт будет доступен по вашему домену с автоматическим HTTPS (SSL).
 
-### 4. Обновление
+---
+
+### Вариант Б: Ручная установка (без Docker)
+
+Если вы не хотите использовать Docker, можно настроить всё вручную через Nginx и systemd.
+
+#### 1. Установка системных зависимостей
 ```bash
-git pull
-docker compose up -d --build
+sudo apt update
+sudo apt install python3-venv python3-pip nginx -y
 ```
 
-## Оптимизация для малых серверов
-- **SQLite**: Минимум ресурсов, никаких тяжелых БД.
-- **Docker**: Легкие образы на базе `slim`.
-- **Caddy**: Современный и быстрый веб-сервер, заменяющий Nginx.
+#### 2. Настройка проекта
+```bash
+git clone https://github.com/youruser/TgGiftGraf.git
+cd TgGiftGraf
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env
+nano .env # Настройте API_ID и API_HASH
+```
+
+#### 3. Авторизация
+```bash
+python3 crawler.py # Введите код
+```
+
+#### 4. Настройка автозапуска (Systemd)
+Создайте сервис для API:
+```bash
+sudo nano /etc/systemd/system/gift-api.service
+```
+Вставьте (заменив пути на свои):
+```ini
+[Unit]
+Description=Gift Graph API
+After=network.target
+
+[Service]
+User=root
+WorkingDirectory=/root/TgGiftGraf
+ExecStart=/root/TgGiftGraf/venv/bin/uvicorn server:app --host 0.0.0.0 --port 8000
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+```
+Повторите аналогично для `crawler.py` и `analytics.py` (для аналитики можно использовать cron).
+
+#### 5. Настройка Nginx и домена
+```bash
+sudo nano /etc/nginx/sites-available/giftgraph
+```
+```nginx
+server {
+    server_name your-domain.com;
+
+    location / {
+        root /root/TgGiftGraf/static;
+        index index.html;
+    }
+
+    location /api/ {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+}
+```
+Активируйте конфиг и получите SSL через Certbot:
+```bash
+sudo ln -s /etc/nginx/sites-available/giftgraph /etc/nginx/sites-enabled/
+sudo certbot --nginx -d your-domain.com
+```
+
+---
+
+## Обновление приложения
+```bash
+git pull
+# Если через Docker:
+docker compose up -d --build
+# Если вручную:
+source venv/bin/activate
+pip install -r requirements.txt
+sudo systemctl restart gift-api gift-crawler
+```
+
+## Полезные команды
+- **Просмотр логов (Docker)**: `docker compose logs -f crawler`
+- **Размер базы**: `du -h gifts.db`
+- **Очистка аватарок**: Папка `static/avatars` очищается автоматически при достижении лимита (настраивается в `.env`).
