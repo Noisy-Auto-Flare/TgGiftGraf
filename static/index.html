@@ -358,6 +358,28 @@
             </button>
         </div>
         <aside id="sidebar">
+            <div class="card">
+                <h4>Добавить пользователя</h4>
+                <div style="display: flex; gap: 0.5rem;">
+                    <input type="text" id="add-user-input" placeholder="@username или ссылка" 
+                           style="flex: 1; background: rgba(0,0,0,0.2); border: 1px solid var(--glass-border); color: var(--text-primary); border-radius: 4px; padding: 5px 10px; font-size: 0.875rem;">
+                    <button class="btn" style="padding: 5px 15px;" onclick="addUserToCrawler()">
+                        <span>➕</span>
+                    </button>
+                </div>
+                <p id="add-user-status" style="font-size: 0.7rem; color: var(--text-secondary); margin-top: 0.5rem; display: none;"></p>
+            </div>
+
+            <div id="local-filters" class="card">
+                <h4>Локальный граф</h4>
+                <div class="filter-group">
+                    <div class="filter-item">
+                        <label>Глубина связей</label>
+                        <input type="number" id="local-depth" value="1" min="1" max="3">
+                    </div>
+                </div>
+            </div>
+
             <div id="user-info-panel" style="display: none;">
                 <div class="user-profile">
                     <img id="user-photo" src="" alt="">
@@ -397,6 +419,16 @@
             <div id="global-filters" class="card" style="display: none;">
                 <h4>Фильтры общего графа</h4>
                 <div class="filter-group">
+                    <div class="filter-item">
+                        <label>Сортировка</label>
+                        <select id="filter-sort" style="background: rgba(0,0,0,0.2); border: 1px solid var(--glass-border); color: var(--text-primary); border-radius: 4px; padding: 2px 5px; font-size: 0.75rem; width: 120px;">
+                            <option value="edges">По связям</option>
+                            <option value="incoming">По подаркам 📥</option>
+                            <option value="outgoing">По подаркам 📤</option>
+                            <option value="recent">Последние</option>
+                            <option value="random">Случайные</option>
+                        </select>
+                    </div>
                     <div class="filter-item">
                         <label>Лимит узлов</label>
                         <input type="number" id="filter-limit" value="1000" step="100" min="100" max="5000">
@@ -573,6 +605,7 @@
             
             // Показываем/скрываем фильтры
             document.getElementById('global-filters').style.display = (mode === 'global') ? 'block' : 'none';
+            document.getElementById('local-filters').style.display = (mode === 'local') ? 'block' : 'none';
             
             if (mode === 'global') {
                 showLoading('Стабилизация масштабного графа...');
@@ -592,27 +625,39 @@
             await loadGlobalGraph();
         }
 
+        // Слушатель изменения глубины
+         document.getElementById('local-depth').addEventListener('change', () => {
+             if (currentMode === 'local' && lastLoadedUserId) {
+                 loadGraph(lastLoadedUserId);
+             }
+         });
+
         async function loadGlobalGraph() {
-            try {
-                const limit = document.getElementById('filter-limit').value;
-                const minEdges = document.getElementById('filter-min-edges').value;
-                const minIncoming = document.getElementById('filter-min-incoming').value;
-                const minOutgoing = document.getElementById('filter-min-outgoing').value;
-                
-                const url = `/api/graph/global?limit=${limit}&min_edges=${minEdges}&min_incoming=${minIncoming}&min_outgoing=${minOutgoing}`;
-                const res = await fetch(url);
-                const data = await res.json();
-                renderGraph(data.nodes, data.edges, true);
+             try {
+                 const sort = document.getElementById('filter-sort').value;
+                 const limit = document.getElementById('filter-limit').value;
+                 const minEdges = document.getElementById('filter-min-edges').value;
+                 const minIncoming = document.getElementById('filter-min-incoming').value;
+                 const minOutgoing = document.getElementById('filter-min-outgoing').value;
+                 
+                 const url = `/api/graph/global?limit=${limit}&min_edges=${minEdges}&min_incoming=${minIncoming}&min_outgoing=${minOutgoing}&sort_by=${sort}`;
+                 const res = await fetch(url);
+                 const data = await res.json();
+                 renderGraph(data.nodes, data.edges, true);
             } catch (e) { 
                 console.error(e);
                 hideLoading();
             }
         }
 
+        let lastLoadedUserId = null;
+
         async function loadGraph(userId) {
-            showLoading('Загрузка графа пользователя...');
+            lastLoadedUserId = userId;
+            const depth = document.getElementById('local-depth').value || 1;
+            showLoading(`Загрузка графа (глубина ${depth})...`);
             try {
-                const res = await fetch(`/api/users/${userId}/graph`);
+                const res = await fetch(`/api/users/${userId}/graph?depth=${depth}`);
                 const data = await res.json();
                 renderGraph(data.nodes, data.edges, false);
                 const user = data.nodes.find(n => n.id === data.stats.user_id);
@@ -633,6 +678,36 @@
                 console.error("Error loading graph:", e);
                 hideLoading();
             }
+        }
+
+        async function addUserToCrawler() {
+            const input = document.getElementById('add-user-input');
+            const status = document.getElementById('add-user-status');
+            const val = input.value.trim();
+            
+            if (!val) return;
+            
+            status.style.display = 'block';
+            status.innerText = 'Добавление в очередь...';
+            status.style.color = 'var(--text-secondary)';
+            
+            try {
+                const res = await fetch(`/api/crawler/add?identifier=${encodeURIComponent(val)}`, { method: 'POST' });
+                const data = await res.json();
+                if (res.ok) {
+                    status.innerText = `Успешно добавлено: ${data.identifier}. Краулер обработает его в ближайшее время.`;
+                    status.style.color = 'var(--accent-color)';
+                    input.value = '';
+                } else {
+                    status.innerText = `Ошибка: ${data.detail || 'неизвестная ошибка'}`;
+                    status.style.color = '#fb7185';
+                }
+            } catch (e) {
+                status.innerText = 'Ошибка сети';
+                status.style.color = '#fb7185';
+            }
+            
+            setTimeout(() => { status.style.display = 'none'; }, 5000);
         }
 
         async function runAnalytics() {

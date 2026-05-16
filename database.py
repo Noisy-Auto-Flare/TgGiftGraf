@@ -58,8 +58,18 @@ def init_db():
     )
     ''')
 
+    # Очередь на резолв юзернеймов (когда мы не знаем ID)
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS resolve_queue (
+        identifier TEXT PRIMARY KEY,
+        added_at INTEGER DEFAULT (strftime('%s','now')),
+        priority INTEGER DEFAULT 0
+    )
+    ''')
+
     # Индексы для ускорения работы очереди и поиска связей
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_queue_priority ON crawl_queue(priority DESC, added_at ASC)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_resolve_priority ON resolve_queue(priority DESC, added_at ASC)')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_users_last_scanned ON users(last_scanned)')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_edges_to_user ON edges(to_user_id)')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_edges_from_user ON edges(from_user_id)')

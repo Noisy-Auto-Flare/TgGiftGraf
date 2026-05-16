@@ -51,30 +51,44 @@ async def get_user_graph(identifier: str, depth: int = 1):
         conn.close()
         raise HTTPException(status_code=404, detail="User not found")
 
-    # Получаем рёбра (ego-graph depth=1)
+    # Получаем узлы подграфа заданной глубины через рекурсивный CTE
     cursor.execute("""
-        SELECT e.*, u1.username as from_username, u2.username as to_username
-        FROM edges e
-        JOIN users u1 ON e.from_user_id = u1.id
-        JOIN users u2 ON e.to_user_id = u2.id
-        WHERE e.from_user_id = ? OR e.to_user_id = ?
-    """, (user_id, user_id))
-    edges_rows = cursor.fetchall()
+        WITH RECURSIVE subgraph_nodes(id, current_depth) AS (
+            SELECT ? as id, 0 as current_depth
+            UNION
+            SELECT 
+                CASE WHEN e.from_user_id = sn.id THEN e.to_user_id ELSE e.from_user_id END,
+                sn.current_depth + 1
+            FROM edges e
+            JOIN subgraph_nodes sn ON e.from_user_id = sn.id OR e.to_user_id = sn.id
+            WHERE sn.current_depth < ?
+        )
+        SELECT DISTINCT id FROM subgraph_nodes
+    """, (user_id, depth))
+    nodes_ids = {row['id'] for row in cursor.fetchall()}
     
-    nodes_ids = {user_id} # Всегда включаем искомого пользователя
+    # Получаем все рёбра МЕЖДУ найденными узлами
     edges = []
-    for row in edges_rows:
-        nodes_ids.add(row['from_user_id'])
-        nodes_ids.add(row['to_user_id'])
-        edges.append({
-            "from": row['from_user_id'],
-            "to": row['to_user_id'],
-            "weight": row['weight'],
-            "label": str(row['weight']), # Число подарков над стрелкой
-            "title": f"Подарков: {row['weight']}\nПоследний: {row['last_gift_title']}"
-        })
+    if nodes_ids:
+        placeholders = ', '.join(['?'] * len(nodes_ids))
+        cursor.execute(f"""
+            SELECT e.*, u1.username as from_username, u2.username as to_username
+            FROM edges e
+            JOIN users u1 ON e.from_user_id = u1.id
+            JOIN users u2 ON e.to_user_id = u2.id
+            WHERE e.from_user_id IN ({placeholders}) AND e.to_user_id IN ({placeholders})
+        """, list(nodes_ids) + list(nodes_ids))
+        
+        for row in cursor.fetchall():
+            edges.append({
+                "from": row['from_user_id'],
+                "to": row['to_user_id'],
+                "weight": row['weight'],
+                "label": str(row['weight']),
+                "title": f"Подарков: {row['weight']}\nПоследний: {row['last_gift_title']}"
+            })
     
-    # Получаем информацию об узлах (включая кластеры и источник)
+    # Получаем информацию об узлах
     nodes = []
     if nodes_ids:
         placeholders = ', '.join(['?'] * len(nodes_ids))
@@ -129,14 +143,28 @@ async def get_global_graph(
     limit: int = 1000, 
     min_edges: int = 0,
     min_incoming: int = 0,
-    min_outgoing: int = 0
+    min_outgoing: int = 0,
+    sort_by: str = "edges" # edges, incoming, outgoing, random, recent
 ):
     conn = get_db_connection()
     cursor = conn.cursor()
     
+    # Определяем сортировку
+    order_clause = "s.total_edges DESC"
+    if sort_by == "incoming":
+        order_clause = "s.total_incoming DESC"
+    elif sort_by == "outgoing":
+        order_clause = "s.total_outgoing DESC"
+    elif sort_by == "random":
+        order_clause = "RANDOM()"
+    elif sort_by == "recent":
+        # Нам нужно знать дату добавления. В таблице users её нет напрямую, 
+        # но мы можем использовать id (они обычно инкрементальные) или добавить поле.
+        # Пока используем id DESC как прокси для "последних добавленных"
+        order_clause = "s.id DESC"
+    
     # Сложный запрос с фильтрацией
-    # Мы считаем агрегаты для каждого пользователя и фильтруем их
-    query = """
+    query = f"""
         WITH user_stats AS (
             SELECT 
                 u.id, 
@@ -155,7 +183,7 @@ async def get_global_graph(
         WHERE s.total_edges >= ? 
           AND IFNULL(s.total_incoming, 0) >= ? 
           AND IFNULL(s.total_outgoing, 0) >= ?
-        ORDER BY s.total_edges DESC
+        ORDER BY {order_clause}
         LIMIT ?
     """
     
@@ -235,6 +263,43 @@ async def run_analytics_endpoint():
         return {"status": "success"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/crawler/add")
+async def add_to_crawler(identifier: str = Query(...)):
+    # Очищаем юзернейм от @ и ссылок
+    clean_id = identifier.strip()
+    if clean_id.startswith("https://t.me/"):
+        clean_id = clean_id.replace("https://t.me/", "")
+    if clean_id.startswith("@"):
+        clean_id = clean_id[1:]
+    
+    if not clean_id:
+        raise HTTPException(status_code=400, detail="Invalid identifier")
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    # Проверяем, может пользователь уже есть в базе
+    user_id = None
+    if clean_id.isdigit():
+        user_id = int(clean_id)
+    else:
+        cursor.execute("SELECT id FROM users WHERE username = ?", (clean_id,))
+        row = cursor.fetchone()
+        if row:
+            user_id = row['id']
+            
+    if user_id:
+        # Если есть ID, сразу в очередь краулера с высоким приоритетом
+        cursor.execute("INSERT OR IGNORE INTO crawl_queue (user_id, priority) VALUES (?, ?)", (user_id, 10))
+        conn.commit()
+    else:
+        # Если нет ID, в очередь на резолв
+        cursor.execute("INSERT OR IGNORE INTO resolve_queue (identifier, priority) VALUES (?, ?)", (clean_id, 10))
+        conn.commit()
+    
+    conn.close()
+    return {"status": "added", "identifier": clean_id}
 
 @app.get("/api/stats/summary")
 async def get_summary():

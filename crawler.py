@@ -490,6 +490,27 @@ async def crawl():
         while True:
             now = int(time.time())
             
+            # Проверяем очередь на резолв (юзернеймы из веб-интерфейса)
+            cursor.execute('SELECT identifier, priority FROM resolve_queue ORDER BY priority DESC, added_at ASC LIMIT 1')
+            resolve_row = cursor.fetchone()
+            if resolve_row:
+                ident = resolve_row['identifier']
+                prio = resolve_row['priority']
+                logger.info(f"Резолвим юзернейм из очереди: {ident}")
+                u_info = await get_user_info(client, ident)
+                if u_info:
+                    cursor.execute('''
+                        INSERT INTO users (id, username, first_name, discovery_source, is_bot) 
+                        VALUES (?, ?, ?, 'web_add', ?)
+                        ON CONFLICT(id) DO UPDATE SET username=excluded.username, first_name=excluded.first_name, is_bot=excluded.is_bot
+                    ''', (u_info['id'], u_info['username'], u_info['first_name'], 1 if u_info['is_bot'] else 0))
+                    if not u_info['is_bot']:
+                        await add_to_queue(conn, u_info['id'], priority=prio, source='web_add')
+                
+                cursor.execute('DELETE FROM resolve_queue WHERE identifier = ?', (ident,))
+                conn.commit()
+                continue # Сразу переходим к обработке этого пользователя (он теперь в crawl_queue)
+
             # Периодическое сканирование чатов (только в режиме цикла)
             if not CRAWL_SINGLE_RUN:
                 if now - last_chat_scan > (CHAT_SCAN_INTERVAL * 60):
