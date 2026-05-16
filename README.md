@@ -155,3 +155,12 @@ sudo systemctl restart gift-api gift-crawler
 - **Просмотр логов (Docker)**: `docker compose logs -f crawler`
 - **Размер базы**: `du -h gifts.db`
 - **Очистка аватарок**: Папка `static/avatars` очищается автоматически при достижении лимита (настраивается в `.env`).
+
+## Решение проблем (Troubleshooting)
+
+### ValueError: too many values to unpack (expected 5, got 6)
+Эта ошибка возникает, если файл сессии `.session` был создан другой версией Telethon или Python.
+**Решение**: Просто удалите файл `gift_crawler.session` (или другое имя, если вы меняли `SESSION_NAME` в `.env`) и запустите краулер снова. Вам потребуется еще раз ввести код подтверждения.
+
+### FloodWaitError
+Telegram ограничивает частоту запросов. Если вы получили эту ошибку, краулер автоматически подождет нужное время. Не пытайтесь перезапускать его слишком часто.

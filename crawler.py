@@ -517,7 +517,17 @@ async def crawl():
         logger.error("API_ID или API_HASH не заданы в .env")
         return
 
-    async with TelegramClient(SESSION_NAME, API_ID, API_HASH) as client:
+    try:
+        client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
+    except ValueError as e:
+        if "unpack" in str(e):
+            logger.error(f"Критическая ошибка сессии: {e}")
+            logger.error(f"Скорее всего, файл {SESSION_NAME}.session поврежден или несовместим (это часто случается при обновлении Python или Telethon).")
+            logger.error(f"РЕШЕНИЕ: Удалите файл {SESSION_NAME}.session в папке проекта и запустите краулер снова.")
+            return
+        raise e
+
+    async with client:
         # Инициализация БД и миграции
         init_db()
         conn = get_db_connection()
