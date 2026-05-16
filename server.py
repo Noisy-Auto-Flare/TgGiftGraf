@@ -127,6 +127,7 @@ async def get_user_graph(identifier: str, depth: int = 1):
         "user_id": user_id,
         "incoming_gifts": incoming,
         "outgoing_gifts": outgoing,
+        "total_gifts": incoming + outgoing,
         "neighbors": len(nodes_ids) - 1 if user_id in nodes_ids else len(nodes_ids),
         "reach_5": reach_5
     }
@@ -144,7 +145,8 @@ async def get_global_graph(
     min_edges: int = 0,
     min_incoming: int = 0,
     min_outgoing: int = 0,
-    sort_by: str = "edges" # edges, incoming, outgoing, random, recent
+    min_total: int = 0,
+    sort_by: str = "edges" # edges, incoming, outgoing, total, random, recent
 ):
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -155,39 +157,50 @@ async def get_global_graph(
         order_clause = "s.total_incoming DESC"
     elif sort_by == "outgoing":
         order_clause = "s.total_outgoing DESC"
+    elif sort_by == "total":
+        order_clause = "s.total_gifts DESC"
     elif sort_by == "random":
         order_clause = "RANDOM()"
     elif sort_by == "recent":
-        # Нам нужно знать дату добавления. В таблице users её нет напрямую, 
-        # но мы можем использовать id (они обычно инкрементальные) или добавить поле.
-        # Пока используем id DESC как прокси для "последних добавленных"
         order_clause = "s.id DESC"
     
-    # Сложный запрос с фильтрацией
+    # Оптимизированный запрос с использованием CTE для агрегации
     query = f"""
-        WITH user_stats AS (
+        WITH incoming_stats AS (
+            SELECT to_user_id as user_id, SUM(weight) as incoming_sum, COUNT(*) as incoming_cnt
+            FROM edges GROUP BY to_user_id
+        ),
+        outgoing_stats AS (
+            SELECT from_user_id as user_id, SUM(weight) as outgoing_sum, COUNT(*) as outgoing_cnt
+            FROM edges GROUP BY from_user_id
+        ),
+        user_stats AS (
             SELECT 
                 u.id, 
                 u.username, 
                 u.first_name, 
                 u.has_photo,
-                (SELECT COUNT(*) FROM edges e WHERE e.from_user_id = u.id OR e.to_user_id = u.id) as total_edges,
-                (SELECT SUM(weight) FROM edges e WHERE e.to_user_id = u.id) as total_incoming,
-                (SELECT SUM(weight) FROM edges e WHERE e.from_user_id = u.id) as total_outgoing
+                IFNULL(i.incoming_cnt, 0) + IFNULL(o.outgoing_cnt, 0) as total_edges,
+                IFNULL(i.incoming_sum, 0) as total_incoming,
+                IFNULL(o.outgoing_sum, 0) as total_outgoing,
+                IFNULL(i.incoming_sum, 0) + IFNULL(o.outgoing_sum, 0) as total_gifts
             FROM users u
-            WHERE u.id IN (SELECT from_user_id FROM edges UNION SELECT to_user_id FROM edges)
+            LEFT JOIN incoming_stats i ON u.id = i.user_id
+            LEFT JOIN outgoing_stats o ON u.id = o.user_id
+            WHERE i.user_id IS NOT NULL OR o.user_id IS NOT NULL
         )
         SELECT s.*, c.cluster_id
         FROM user_stats s
         LEFT JOIN user_clusters c ON s.id = c.user_id
         WHERE s.total_edges >= ? 
-          AND IFNULL(s.total_incoming, 0) >= ? 
-          AND IFNULL(s.total_outgoing, 0) >= ?
+          AND s.total_incoming >= ? 
+          AND s.total_outgoing >= ?
+          AND s.total_gifts >= ?
         ORDER BY {order_clause}
         LIMIT ?
     """
     
-    cursor.execute(query, (min_edges, min_incoming, min_outgoing, limit))
+    cursor.execute(query, (min_edges, min_incoming, min_outgoing, min_total, limit))
     nodes_rows = cursor.fetchall()
     
     nodes_ids = [row['id'] for row in nodes_rows]
@@ -198,18 +211,19 @@ async def get_global_graph(
             display_name = display_name[:13] + "..."
             
         nodes.append({
-            "id": row['id'],
-            "label": display_name,
-            "username": row['username'],
-            "first_name": row['first_name'],
-            "cluster": row['cluster_id'],
-            "has_photo": bool(row['has_photo']),
-            "stats": {
-                "edges": row['total_edges'],
-                "incoming": row['total_incoming'] or 0,
-                "outgoing": row['total_outgoing'] or 0
-            }
-        })
+                "id": row['id'],
+                "label": display_name,
+                "username": row['username'],
+                "first_name": row['first_name'],
+                "cluster": row['cluster_id'],
+                "has_photo": bool(row['has_photo']),
+                "stats": {
+                    "edges": row['total_edges'],
+                    "incoming": row['total_incoming'] or 0,
+                    "outgoing": row['total_outgoing'] or 0,
+                    "total": row['total_gifts'] or 0
+                }
+            })
     
     # Получаем рёбра только МЕЖДУ пользователями из нашего списка узлов
     if nodes_ids:

@@ -221,56 +221,100 @@ async def process_user(client, conn, target_user_id):
         
         # Нативный запрос подарков
         logger.info(f"Запрос подарков для {target_user_id}...")
-        await human_delay(0.5, 1.0)
 
         # Динамически ищем методы
         GetUserGiftsRequest = getattr(functions.payments, 'GetUserGiftsRequest', None)
         GetSavedStarGiftsRequest = getattr(functions.payments, 'GetSavedStarGiftsRequest', None)
         
-        gifts_res = None
+        all_gifts = []
+        all_users = []
+        
         # 1. Пробуем GetSavedStarGiftsRequest (Star Gifts)
         if GetSavedStarGiftsRequest:
-            try:
-                gifts_res = await client(GetSavedStarGiftsRequest(peer=input_entity, offset='', limit=100))
-                if gifts_res and getattr(gifts_res, 'gifts', []):
-                    logger.info(f"Найдено {len(gifts_res.gifts)} Star Gifts для {target_user_id}")
-            except Exception as e:
-                logger.debug(f"GetSavedStarGiftsRequest failed: {e}")
+            offset = ''
+            limit = 50
+            while True:
+                try:
+                    await human_delay(0.5, 1.0)
+                    res = await client(GetSavedStarGiftsRequest(peer=input_entity, offset=offset, limit=limit))
+                    if not res or not res.gifts:
+                        break
+                    
+                    all_gifts.extend(res.gifts)
+                    if hasattr(res, 'users'):
+                        all_users.extend(res.users)
+                    
+                    logger.info(f"Получено {len(res.gifts)} Star Gifts (всего {len(all_gifts)}) для {target_user_id}")
+                    
+                    if len(res.gifts) < limit:
+                        break
+                    
+                    offset = getattr(res, 'next_offset', '')
+                    if not offset:
+                        break
+                    
+                    # Увеличиваем лимит согласно пожеланию пользователя
+                    if limit == 50: limit = 300
+                    elif limit == 300: limit = 500
+                    else: limit = 1000 # Максимум для безопасности
+                except Exception as e:
+                    logger.debug(f"GetSavedStarGiftsRequest loop error: {e}")
+                    break
 
-        # 2. Если ничего не нашли, пробуем GetUserGiftsRequest (Старые подарки)
-        if (not gifts_res or not getattr(gifts_res, 'gifts', [])) and GetUserGiftsRequest:
-            try:
-                gifts_res = await client(GetUserGiftsRequest(user_id=input_entity, offset='', limit=100))
-                if gifts_res and getattr(gifts_res, 'gifts', []):
-                    logger.info(f"Найдено {len(gifts_res.gifts)} старых подарков для {target_user_id}")
-            except Exception as e:
-                logger.debug(f"GetUserGiftsRequest failed: {e}")
+        # 2. Пробуем GetUserGiftsRequest (Старые подарки)
+        if GetUserGiftsRequest:
+            offset = ''
+            limit = 50
+            while True:
+                try:
+                    await human_delay(0.5, 1.0)
+                    res = await client(GetUserGiftsRequest(user_id=input_entity, offset=offset, limit=limit))
+                    if not res or not res.gifts:
+                        break
+                    
+                    all_gifts.extend(res.gifts)
+                    if hasattr(res, 'users'):
+                        all_users.extend(res.users)
+                    
+                    logger.info(f"Получено {len(res.gifts)} старых подарков (всего {len(all_gifts)}) для {target_user_id}")
+                    
+                    if len(res.gifts) < limit:
+                        break
+                        
+                    offset = getattr(res, 'next_offset', '')
+                    if not offset:
+                        break
+                        
+                    if limit == 50: limit = 300
+                    elif limit == 300: limit = 500
+                    else: limit = 1000
+                except Exception as e:
+                    logger.debug(f"GetUserGiftsRequest loop error: {e}")
+                    break
 
-        if not gifts_res or not hasattr(gifts_res, 'gifts'):
+        if not all_gifts:
             logger.info(f"Подарки для {target_user_id} не найдены ни одним из методов.")
             cursor.execute("UPDATE users SET last_scanned = ? WHERE id = ?", (int(time.time()), target_user_id))
             cursor.execute("DELETE FROM crawl_queue WHERE user_id = ?", (target_user_id,))
             conn.commit()
             return
 
-        gift_count = len(gifts_res.gifts)
-        if gift_count > 0:
+        if len(all_gifts) > 0:
             # Сохраняем пользователей, пришедших в ответе (это отправители подарков)
             user_map = {}
-            if hasattr(gifts_res, 'users'):
-                for u in gifts_res.users:
-                    if isinstance(u, types.User):
-                        user_map[u.id] = u
-                        # Сохраняем/обновляем инфо о пользователе (НЕ сбрасываем has_photo)
-                        cursor.execute('''
-                            INSERT INTO users (id, username, first_name, discovery_source, is_bot) 
-                            VALUES (?, ?, ?, 'gift_list', 0)
-                            ON CONFLICT(id) DO UPDATE SET 
-                                username = COALESCE(excluded.username, users.username),
-                                first_name = COALESCE(excluded.first_name, users.first_name)
-                        ''', (u.id, u.username, (u.first_name or "") + (" " + u.last_name if u.last_name else "")))
+            for u in all_users:
+                if isinstance(u, types.User):
+                    user_map[u.id] = u
+                    # Сохраняем/обновляем инфо о пользователе (НЕ сбрасываем has_photo)
+                    cursor.execute('''
+                        INSERT INTO users (id, username, first_name, discovery_source, is_bot) 
+                        VALUES (?, ?, ?, 'gift_list', 0)
+                        ON CONFLICT(id) DO UPDATE SET 
+                            username = COALESCE(excluded.username, users.username),
+                            first_name = COALESCE(excluded.first_name, users.first_name)
+                    ''', (u.id, u.username, (u.first_name or "") + (" " + u.last_name if u.last_name else "")))
 
-            for gift_attr in gifts_res.gifts:
+            for gift_attr in all_gifts:
                 from_id = getattr(gift_attr, 'from_id', None)
                 name_hidden = getattr(gift_attr, 'name_hidden', False)
                 

@@ -407,6 +407,10 @@
                             <div class="label">Охват (5 ш.)</div>
                             <div class="value" id="stat-reach">0</div>
                         </div>
+                        <div class="stat-item">
+                            <div class="label">Всего подарков</div>
+                            <div class="value" id="stat-total">0</div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -423,8 +427,9 @@
                         <label>Сортировка</label>
                         <select id="filter-sort" style="background: rgba(0,0,0,0.2); border: 1px solid var(--glass-border); color: var(--text-primary); border-radius: 4px; padding: 2px 5px; font-size: 0.75rem; width: 120px;">
                             <option value="edges">По связям</option>
-                            <option value="incoming">По подаркам 📥</option>
-                            <option value="outgoing">По подаркам 📤</option>
+                            <option value="total">Сумма подарков 🎁</option>
+                            <option value="incoming">Подарки 📥</option>
+                            <option value="outgoing">Подарки 📤</option>
                             <option value="recent">Последние</option>
                             <option value="random">Случайные</option>
                         </select>
@@ -432,6 +437,10 @@
                     <div class="filter-item">
                         <label>Лимит узлов</label>
                         <input type="number" id="filter-limit" value="1000" step="100" min="100" max="5000">
+                    </div>
+                    <div class="filter-item">
+                        <label>Мин. сумма</label>
+                        <input type="number" id="filter-min-total" value="0" min="0">
                     </div>
                     <div class="filter-item">
                         <label>Мин. связей</label>
@@ -635,13 +644,14 @@
         async function loadGlobalGraph() {
              try {
                  const sort = document.getElementById('filter-sort').value;
-                 const limit = document.getElementById('filter-limit').value;
-                 const minEdges = document.getElementById('filter-min-edges').value;
-                 const minIncoming = document.getElementById('filter-min-incoming').value;
-                 const minOutgoing = document.getElementById('filter-min-outgoing').value;
-                 
-                 const url = `/api/graph/global?limit=${limit}&min_edges=${minEdges}&min_incoming=${minIncoming}&min_outgoing=${minOutgoing}&sort_by=${sort}`;
-                 const res = await fetch(url);
+                  const limit = document.getElementById('filter-limit').value;
+                  const minEdges = document.getElementById('filter-min-edges').value;
+                  const minIncoming = document.getElementById('filter-min-incoming').value;
+                  const minOutgoing = document.getElementById('filter-min-outgoing').value;
+                  const minTotal = document.getElementById('filter-min-total').value;
+                  
+                  const url = `/api/graph/global?limit=${limit}&min_edges=${minEdges}&min_incoming=${minIncoming}&min_outgoing=${minOutgoing}&min_total=${minTotal}&sort_by=${sort}`;
+                  const res = await fetch(url);
                  const data = await res.json();
                  renderGraph(data.nodes, data.edges, true);
             } catch (e) { 
@@ -738,6 +748,7 @@
             document.getElementById('stat-outgoing').innerText = stats.outgoing_gifts;
             document.getElementById('stat-neighbors').innerText = stats.neighbors;
             document.getElementById('stat-reach').innerText = stats.reach_5;
+            document.getElementById('stat-total').innerText = stats.total_gifts || (stats.incoming_gifts + stats.outgoing_gifts);
         }
 
         function renderGraph(nodesData, edgesData, isGlobal) {
@@ -789,7 +800,7 @@
                 from: edge.from,
                 to: edge.to,
                 value: edge.weight,
-                length: edge.length || (isGlobal ? 200 : 150),
+                length: edge.length || (isGlobal ? 250 : 250),
                 color: { 
                     color: isSmallGraph ? 'rgba(56, 189, 248, 0.4)' : 'rgba(148, 163, 184, 0.3)', 
                     highlight: '#38bdf8',
@@ -822,18 +833,18 @@
                     enabled: true,
                     solver: (isGlobal && !isSmallGraph) ? 'forceAtlas2Based' : 'barnesHut',
                     barnesHut: {
-                        gravitationalConstant: -1500, // Снижаем силу отталкивания
-                        centralGravity: 0.3,
-                        springLength: 150,
+                        gravitationalConstant: -4000, // Увеличиваем силу отталкивания для простора
+                        centralGravity: 0.1, // Ослабляем притяжение к центру
+                        springLength: 200,
                         springConstant: 0.04,
-                        damping: 0.4, // Повышаем затухание для стабильности
-                        avoidOverlap: 0.3 // Снижаем силу выталкивания
+                        damping: 0.4, 
+                        avoidOverlap: 1 // Увеличиваем силу выталкивания
                     },
                     forceAtlas2Based: {
-                        gravitationalConstant: -100,
+                        gravitationalConstant: -200,
                         centralGravity: 0.01,
                         springConstant: 0.08,
-                        springLength: 150,
+                        springLength: 250,
                         damping: 0.4,
                         avoidOverlap: 1
                     },
