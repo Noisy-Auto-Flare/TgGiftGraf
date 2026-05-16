@@ -25,6 +25,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Снижаем шум от Telethon
+logging.getLogger('telethon').setLevel(logging.WARNING)
+
 async def human_delay(min_sec=1.0, max_sec=3.0):
     """Небольшая пауза между API запросами для имитации человека."""
     await asyncio.sleep(random.uniform(float(min_sec), float(max_sec)))
@@ -246,17 +249,14 @@ async def process_user(client, conn, target_user_id):
                     
                     logger.info(f"Получено {len(res.gifts)} Star Gifts (всего {len(all_gifts)}) для {target_user_id}")
                     
-                    if len(res.gifts) < limit:
+                    # Если получили меньше, чем просили, и нет следующего офсета - значит всё
+                    next_offset = getattr(res, 'next_offset', '')
+                    if not next_offset or (len(res.gifts) < limit and not next_offset):
                         break
                     
-                    offset = getattr(res, 'next_offset', '')
-                    if not offset:
-                        break
-                    
-                    # Увеличиваем лимит согласно пожеланию пользователя
-                    if limit == 50: limit = 300
-                    elif limit == 300: limit = 500
-                    else: limit = 1000 # Максимум для безопасности
+                    offset = next_offset
+                    # Увеличиваем лимит для следующего запроса до максимума (100)
+                    limit = 100 
                 except Exception as e:
                     logger.debug(f"GetSavedStarGiftsRequest loop error: {e}")
                     break
@@ -278,16 +278,12 @@ async def process_user(client, conn, target_user_id):
                     
                     logger.info(f"Получено {len(res.gifts)} старых подарков (всего {len(all_gifts)}) для {target_user_id}")
                     
-                    if len(res.gifts) < limit:
+                    next_offset = getattr(res, 'next_offset', '')
+                    if not next_offset or (len(res.gifts) < limit and not next_offset):
                         break
                         
-                    offset = getattr(res, 'next_offset', '')
-                    if not offset:
-                        break
-                        
-                    if limit == 50: limit = 300
-                    elif limit == 300: limit = 500
-                    else: limit = 1000
+                    offset = next_offset
+                    limit = 100
                 except Exception as e:
                     logger.debug(f"GetUserGiftsRequest loop error: {e}")
                     break
