@@ -23,3 +23,7 @@ MAX_CRAWL_QUEUE_SIZE = int(os.getenv("MAX_CRAWL_QUEUE_SIZE", 50000))
 SCAN_SELF_DIALOGS = os.getenv("SCAN_SELF_DIALOGS", "true").lower() == "true"
 
 CRAWL_SINGLE_RUN = os.getenv("CRAWL_SINGLE_RUN", "false").lower() == "true"
+
+# Лимиты хранилища
+MAX_AVATARS_SIZE_MB = int(os.getenv("MAX_AVATARS_SIZE_MB", 300))
+AVATARS_DIR = "static/avatars"

@@ -10,7 +10,7 @@ from config import (
     API_ID, API_HASH, SESSION_NAME, START_USERNAMES, TARGET_CHATS,
     CRAWL_DELAY_MIN, CRAWL_DELAY_MAX, MAX_CRAWL_QUEUE_SIZE,
     CHAT_SCAN_INTERVAL, RESCAN_THRESHOLD_DAYS, CRAWL_SINGLE_RUN,
-    SCAN_SELF_DIALOGS
+    SCAN_SELF_DIALOGS, MAX_AVATARS_SIZE_MB, AVATARS_DIR
 )
 
 # Настройка логирования с ротацией
@@ -29,14 +29,39 @@ async def human_delay(min_sec=1.0, max_sec=3.0):
     """Небольшая пауза между API запросами для имитации человека."""
     await asyncio.sleep(random.uniform(float(min_sec), float(max_sec)))
 
+def get_dir_size(path='.'):
+    """Возвращает размер папки в мегабайтах."""
+    total_size = 0
+    try:
+        if not os.path.exists(path):
+            return 0
+        for dirpath, dirnames, filenames in os.walk(path):
+            for f in filenames:
+                fp = os.path.join(dirpath, f)
+                # пропускаем, если это символическая ссылка
+                if not os.path.islink(fp):
+                    total_size += os.path.getsize(fp)
+    except Exception as e:
+        logger.error(f"Ошибка при подсчете размера папки {path}: {e}")
+    return total_size / (1024 * 1024)
+
 async def download_profile_photo(client, user_id, entity):
     """Скачивает фото профиля пользователя максимально быстро (только если доступно напрямую)."""
     try:
-        path = f"static/avatars/{user_id}.jpg"
+        if not os.path.exists(AVATARS_DIR):
+            os.makedirs(AVATARS_DIR, exist_ok=True)
+            
+        path = f"{AVATARS_DIR}/{user_id}.jpg"
         
         # Если файл уже есть и он не пустой, не тратим ресурсы
         if os.path.exists(path) and os.path.getsize(path) > 0:
             return True
+
+        # Проверка лимита места
+        current_size = get_dir_size(AVATARS_DIR)
+        if current_size >= MAX_AVATARS_SIZE_MB:
+            logger.debug(f"Лимит аватарок превышен ({current_size:.1f}MB >= {MAX_AVATARS_SIZE_MB}MB). Пропуск.")
+            return False
 
         # Пробуем скачать только если фото доступно в базовом объекте
         if hasattr(entity, 'photo') and entity.photo:
@@ -293,7 +318,7 @@ async def process_user(client, conn, target_user_id):
 
                     if u_info and not u_info['is_bot']:
                         # Пытаемся скачать фото для отправителя, если его еще нет на диске
-                        photo_path = f"static/avatars/{u_info['id']}.jpg"
+                        photo_path = f"{AVATARS_DIR}/{u_info['id']}.jpg"
                         if not (os.path.exists(photo_path) and os.path.getsize(photo_path) > 0):
                             try:
                                 sender_entity = await client.get_entity(u_info['id'])
